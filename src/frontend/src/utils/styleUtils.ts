@@ -190,6 +190,7 @@ import {
   GradientUngroup,
 } from "../icons/GradientSparkles";
 import { GroqIcon } from "../icons/Groq";
+import { WatsonxIcon } from "../icons/Watsonx";
 import { HuggingFaceIcon } from "../icons/HuggingFace";
 import { IFixIcon } from "../icons/IFixIt";
 import { LangChainIcon } from "../icons/LangChain";
@@ -388,6 +389,7 @@ export const nodeIconsLucide: iconsType = {
   Google: GoogleIcon,
   GoogleGenerativeAI: GoogleGenerativeAIIcon,
   Groq: GroqIcon,
+  Watsonx: WatsonxIcon,
   HNLoader: HackerNewsIcon,
   HuggingFaceHub: HuggingFaceIcon,
   HuggingFace: HuggingFaceIcon,
