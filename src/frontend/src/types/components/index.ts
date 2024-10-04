@@ -369,6 +369,7 @@ export type IconComponentProps = {
   stroke?: string;
   strokeWidth?: number;
   id?: string;
+  skipFallback?: boolean;
 };
 
 export type InputProps = {
@@ -827,6 +828,7 @@ export type dropdownButtonPropsType = {
   options: Array<{ name: string; onBtnClick: () => void }>;
   plusButton?: boolean;
   dropdownOptions?: boolean;
+  isFetchingFolders?: boolean;
 };
 
 export type IOFieldViewProps = {
@@ -878,4 +880,12 @@ export type handleSelectPropsType = {
   lockChat: boolean;
   setLockChat: (lock: boolean) => void;
   setChatHistory: (chatHistory: ChatMessageType) => void;
+};
+
+export type LinkComponentType = {
+  value: Partial<InputFieldType>;
+  onChange: (value: string) => void;
+  disabled?: boolean;
+  editNode?: boolean;
+  id?: string;
 };

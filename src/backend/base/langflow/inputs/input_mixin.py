@@ -18,7 +18,7 @@ from langflow.schema.table import Column, TableSchema
 class FieldTypes(str, Enum):
     TEXT = "str"
     INTEGER = "int"
-    PASSWORD = "str"
+    PASSWORD = "str"  # noqa: PIE796
     FLOAT = "float"
     BOOLEAN = "bool"
     DICT = "dict"
@@ -28,6 +28,7 @@ class FieldTypes(str, Enum):
     CODE = "code"
     OTHER = "other"
     TABLE = "table"
+    LINK = "link"
 
 
 SerializableFieldTypes = Annotated[FieldTypes, PlainSerializer(lambda v: v.value, return_type=str)]
@@ -131,13 +132,16 @@ class FileMixin(BaseModel):
     @classmethod
     def validate_file_types(cls, v):
         if not isinstance(v, list):
-            raise ValueError("file_types must be a list")
+            msg = "file_types must be a list"
+            raise ValueError(msg)
         # types should be a list of extensions without the dot
         for file_type in v:
             if not isinstance(file_type, str):
-                raise ValueError("file_types must be a list of strings")
+                msg = "file_types must be a list of strings"
+                raise ValueError(msg)
             if file_type.startswith("."):
-                raise ValueError("file_types should not start with a dot")
+                msg = "file_types should not start with a dot"
+                raise ValueError(msg)
         return v
 
 
@@ -156,6 +160,13 @@ class MultilineMixin(BaseModel):
     multiline: CoalesceBool = True
 
 
+class LinkMixin(BaseModel):
+    icon: str | None = None
+    """Icon to be displayed in the link."""
+    text: str | None = None
+    """Text to be displayed in the link."""
+
+
 class TableMixin(BaseModel):
     table_schema: TableSchema | list[Column] | None = None
 
@@ -166,4 +177,5 @@ class TableMixin(BaseModel):
             return TableSchema(columns=v)
         if isinstance(v, TableSchema):
             return v
-        raise ValueError("table_schema must be a TableSchema or a list of Columns")
+        msg = "table_schema must be a TableSchema or a list of Columns"
+        raise ValueError(msg)

@@ -1,11 +1,13 @@
-from typing import TYPE_CHECKING, List, Union
+from __future__ import annotations
 
-from langchain_core.callbacks import BaseCallbackHandler
+from typing import TYPE_CHECKING
+
 from loguru import logger
 
 from langflow.services.deps import get_plugins_service
 
 if TYPE_CHECKING:
+    from langchain_core.callbacks import BaseCallbackHandler
     from langfuse.callback import CallbackHandler  # type: ignore
 
 
@@ -34,7 +36,7 @@ def get_langfuse_callback(trace_id):
     return None
 
 
-def flush_langfuse_callback_if_present(callbacks: List[Union[BaseCallbackHandler, "CallbackHandler"]]):
+def flush_langfuse_callback_if_present(callbacks: list[BaseCallbackHandler | CallbackHandler]):
     """
     If langfuse callback is present, run callback.langfuse.flush()
     """

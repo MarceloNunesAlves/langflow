@@ -7,7 +7,7 @@ from langchain_community.agent_toolkits.json.toolkit import JsonToolkit
 from langchain_community.tools.json.tool import JsonSpec
 
 from langflow.base.agents.agent import LCAgentComponent
-from langflow.inputs import HandleInput, FileInput
+from langflow.inputs import FileInput, HandleInput
 
 
 class JsonAgentComponent(LCAgentComponent):
@@ -15,14 +15,15 @@ class JsonAgentComponent(LCAgentComponent):
     description = "Construct a json agent from an LLM and tools."
     name = "JsonAgent"
 
-    inputs = LCAgentComponent._base_inputs + [
+    inputs = [
+        *LCAgentComponent._base_inputs,
         HandleInput(name="llm", display_name="Language Model", input_types=["LanguageModel"], required=True),
         FileInput(name="path", display_name="File Path", file_types=["json", "yaml", "yml"], required=True),
     ]
 
     def build_agent(self) -> AgentExecutor:
         if self.path.endswith("yaml") or self.path.endswith("yml"):
-            with open(self.path, "r") as file:
+            with open(self.path) as file:
                 yaml_dict = yaml.load(file, Loader=yaml.FullLoader)
             spec = JsonSpec(dict_=yaml_dict)
         else:

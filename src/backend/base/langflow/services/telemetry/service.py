@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import contextlib
 import os
@@ -7,7 +9,6 @@ from typing import TYPE_CHECKING
 
 import httpx
 from loguru import logger
-from pydantic import BaseModel
 
 from langflow.services.base import Service
 from langflow.services.telemetry.opentelemetry import OpenTelemetry
@@ -21,13 +22,15 @@ from langflow.services.telemetry.schema import (
 from langflow.utils.version import get_version_info
 
 if TYPE_CHECKING:
+    from pydantic import BaseModel
+
     from langflow.services.settings.service import SettingsService
 
 
 class TelemetryService(Service):
     name = "telemetry_service"
 
-    def __init__(self, settings_service: "SettingsService"):
+    def __init__(self, settings_service: SettingsService):
         super().__init__()
         self.settings_service = settings_service
         self.base_url = settings_service.settings.telemetry_base_url

@@ -1,23 +1,25 @@
+from __future__ import annotations
+
 import asyncio
 import os
 from collections import defaultdict
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
-from uuid import UUID
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
 from langflow.services.base import Service
-from langflow.services.tracing.base import BaseTracer
-from langflow.services.tracing.schema import Log
 
 if TYPE_CHECKING:
+    from uuid import UUID
+
     from langchain.callbacks.base import BaseCallbackHandler
 
     from langflow.custom.custom_component.component import Component
     from langflow.graph.vertex.base import Vertex
-    from langflow.services.monitor.service import MonitorService
     from langflow.services.settings.service import SettingsService
+    from langflow.services.tracing.base import BaseTracer
+    from langflow.services.tracing.schema import Log
 
 
 def _get_langsmith_tracer():
@@ -41,9 +43,8 @@ def _get_langfuse_tracer():
 class TracingService(Service):
     name = "tracing_service"
 
-    def __init__(self, settings_service: "SettingsService", monitor_service: "MonitorService"):
+    def __init__(self, settings_service: SettingsService):
         self.settings_service = settings_service
-        self.monitor_service = monitor_service
         self.inputs: dict[str, dict] = defaultdict(dict)
         self.inputs_metadata: dict[str, dict] = defaultdict(dict)
         self.outputs: dict[str, dict] = defaultdict(dict)
@@ -155,9 +156,9 @@ class TracingService(Service):
         trace_id: str,
         trace_name: str,
         trace_type: str,
-        inputs: Dict[str, Any],
-        metadata: Optional[Dict[str, Any]] = None,
-        vertex: Optional["Vertex"] = None,
+        inputs: dict[str, Any],
+        metadata: dict[str, Any] | None = None,
+        vertex: Vertex | None = None,
     ):
         inputs = self._cleanup_inputs(inputs)
         self.inputs[trace_name] = inputs
@@ -205,10 +206,10 @@ class TracingService(Service):
     @asynccontextmanager
     async def trace_context(
         self,
-        component: "Component",
+        component: Component,
         trace_name: str,
-        inputs: Dict[str, Any],
-        metadata: Optional[Dict[str, Any]] = None,
+        inputs: dict[str, Any],
+        metadata: dict[str, Any] | None = None,
     ):
         trace_id = trace_name
         if component._vertex:
@@ -237,20 +238,20 @@ class TracingService(Service):
     def set_outputs(
         self,
         trace_name: str,
-        outputs: Dict[str, Any],
-        output_metadata: Dict[str, Any] | None = None,
+        outputs: dict[str, Any],
+        output_metadata: dict[str, Any] | None = None,
     ):
         self.outputs[trace_name] |= outputs or {}
         self.outputs_metadata[trace_name] |= output_metadata or {}
 
-    def _cleanup_inputs(self, inputs: Dict[str, Any]):
+    def _cleanup_inputs(self, inputs: dict[str, Any]):
         inputs = inputs.copy()
-        for key in inputs.keys():
+        for key in inputs:
             if "api_key" in key:
                 inputs[key] = "*****"  # avoid logging api_keys for security reasons
         return inputs
 
-    def get_langchain_callbacks(self) -> List["BaseCallbackHandler"]:
+    def get_langchain_callbacks(self) -> list[BaseCallbackHandler]:
         callbacks = []
         for tracer in self._tracers.values():
             if not tracer.ready:  # type: ignore
