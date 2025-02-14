@@ -12,6 +12,7 @@ TOOL_TABLE_SCHEMA = [
         "sortable": False,
         "filterable": False,
         "edit_mode": EditMode.INLINE,
+        "hidden": False,
     },
     {
         "name": "description",
@@ -20,21 +21,20 @@ TOOL_TABLE_SCHEMA = [
         "description": "Describe the purpose of the tool.",
         "sortable": False,
         "filterable": False,
-        "edit_mode": EditMode.INLINE,
+        "edit_mode": EditMode.POPOVER,
+        "hidden": False,
     },
     {
         "name": "tags",
         "display_name": "Tool Identifiers",
         "type": "str",
-        "description": (
-            "These are the default identifiers for the tools and cannot be changed. "
-            "Tool Name and Tool Description are the only editable fields."
-        ),
+        "description": ("The default identifiers for the tools and cannot be changed."),
         "disable_edit": True,
         "sortable": False,
         "filterable": False,
         "edit_mode": EditMode.INLINE,
+        "hidden": True,
     },
 ]
 
-TOOLS_METADATA_INFO = "Use the table to configure the tools."
+TOOLS_METADATA_INFO = "Modify tool names and descriptions to help agents understand when to use each tool."

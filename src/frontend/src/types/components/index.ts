@@ -46,6 +46,7 @@ export type InputComponentType = {
   onChangeFolderName?: (e: any) => void;
   nodeStyle?: boolean;
   isToolMode?: boolean;
+  popoverWidth?: string;
 };
 export type DropDownComponent = {
   disabled?: boolean;
@@ -53,11 +54,13 @@ export type DropDownComponent = {
   value: string;
   combobox?: boolean;
   options: string[];
+  optionsMetaData?: any[];
   onSelect: (value: string, dbValue?: boolean, snapshot?: boolean) => void;
   editNode?: boolean;
   id?: string;
   children?: ReactNode;
   name?: string;
+  dialogInputs?: any;
 };
 export type ParameterComponentType = {
   selected?: boolean;
@@ -502,7 +505,6 @@ export type ChatInputType = {
   inputRef: {
     current: any;
   };
-  lockChat: boolean;
   noInput: boolean;
   sendMessage: ({
     repeat,
@@ -590,9 +592,7 @@ export type codeAreaModalPropsType = {
 
 export type chatMessagePropsType = {
   chat: ChatMessageType;
-  lockChat: boolean;
   lastMessage: boolean;
-  setLockChat: (lock: boolean) => void;
   updateChat: (
     chat: ChatMessageType,
     message: string,
@@ -671,6 +671,8 @@ export type buttonBoxPropsType = {
 export type FlowSettingsPropsType = {
   open: boolean;
   setOpen: (open: boolean) => void;
+  details?: boolean;
+  flowData?: FlowType;
 };
 
 export type groupDataType = {
@@ -767,8 +769,6 @@ export type chatViewProps = {
     repeat: number;
     files?: string[];
   }) => void;
-  lockChat: boolean;
-  setLockChat: (lock: boolean) => void;
   visibleSession?: string;
   focusChat?: string;
   closeChat?: () => void;
@@ -783,21 +783,17 @@ export type toolbarSelectItemProps = {
   value: string;
   icon: string;
   style?: string;
-  dataTestId: string;
+  dataTestId?: string;
   ping?: boolean;
   shortcut: string;
 };
 
 export type clearChatPropsType = {
-  lockChat: boolean;
-  setLockChat: (lock: boolean) => void;
   setChatHistory: (chatHistory: ChatMessageType) => void;
   method: string;
 };
 
 export type handleSelectPropsType = {
   event: string;
-  lockChat: boolean;
-  setLockChat: (lock: boolean) => void;
   setChatHistory: (chatHistory: ChatMessageType) => void;
 };

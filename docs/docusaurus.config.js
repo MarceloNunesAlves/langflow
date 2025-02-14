@@ -40,7 +40,7 @@ const config = {
         docs: {
           routeBasePath: "/", // Serve the docs at the site's root
           sidebarPath: require.resolve("./sidebars.js"), // Use sidebars.js file
-          sidebarCollapsed: true,
+          sidebarCollapsed: false,
           beforeDefaultRemarkPlugins: [
             [
               remarkCodeHike,
@@ -116,8 +116,9 @@ const config = {
             ],
           },
           {
-            to: "/workspace-overview",
+            to: "concepts-overview",
             from: [
+              "/workspace-overview",
               "/365085a8-a90a-43f9-a779-f8769ec7eca1",
               "/My-Collection",
               "/workspace",
@@ -125,20 +126,30 @@ const config = {
             ],
           },
           {
-            to: "/components-overview",
-            from: "/components",
-          },
+            to: "/concepts-components",
+            from: [
+              "/components",
+              "/components-overview"
+            ],
+            },
           {
             to: "/configuration-global-variables",
             from: "/settings-global-variables",
           },
           {
-            to: "/workspace-playground",
-            from: "/guides-chat-memory",
+            to: "/concepts-playground",
+            from: [
+              "/workspace-playground",
+              "/workspace-logs",
+              "/guides-chat-memory",
+            ],
           },
           {
-            to: "/configuration-objects",
-            from: "/guides-data-message",
+            to: "/concepts-objects",
+            from: [
+              "/guides-data-message",
+              "/configuration-objects",
+            ]
           },
           {
             to: "/tutorials-sequential-agent",
@@ -159,6 +170,14 @@ const config = {
           {
             to: "/components-vector-stores",
             from: "/components-rag",
+          },
+          {
+            to: "/concepts-api",
+            from: "/workspace-api",
+          },
+          {
+            to: "/components-custom-components",
+            from: "/components/custom",
           },
           // add more redirects like this
           // {
@@ -236,7 +255,7 @@ const config = {
       },
       docs: {
         sidebar: {
-          hideable: true,
+          hideable: false,
         },
       },
     }),

@@ -2,7 +2,6 @@ import { DefaultEdge } from "@/CustomEdges";
 import NoteNode from "@/CustomNodes/NoteNode";
 
 import ForwardedIconComponent from "@/components/common/genericIconComponent";
-import LoadingComponent from "@/components/common/loadingComponent";
 import CanvasControls, {
   CustomControlButton,
 } from "@/components/core/canvasControlsComponent";
@@ -14,6 +13,7 @@ import {
   NOTE_NODE_MIN_WIDTH,
 } from "@/constants/constants";
 import { useGetBuildsQuery } from "@/controllers/API/queries/_builds";
+import CustomLoader from "@/customization/components/custom-loader";
 import { track } from "@/customization/utils/analytics";
 import useAutoSaveFlow from "@/hooks/flows/use-autosave-flow";
 import useUploadFlow from "@/hooks/flows/use-upload-flow";
@@ -86,6 +86,9 @@ export default function Page({ view }: { view?: boolean }): JSX.Element {
   const templates = useTypesStore((state) => state.templates);
   const setFilterEdge = useFlowStore((state) => state.setFilterEdge);
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
+  const setPositionDictionary = useFlowStore(
+    (state) => state.setPositionDictionary,
+  );
 
   const reactFlowInstance = useFlowStore((state) => state.reactFlowInstance);
   const setReactFlowInstance = useFlowStore(
@@ -112,7 +115,6 @@ export default function Page({ view }: { view?: boolean }): JSX.Element {
   );
   const onConnect = useFlowStore((state) => state.onConnect);
   const setErrorData = useAlertStore((state) => state.setErrorData);
-  const setNoticeData = useAlertStore((state) => state.setNoticeData);
   const updateCurrentFlow = useFlowStore((state) => state.updateCurrentFlow);
   const [selectionMenuVisible, setSelectionMenuVisible] = useState(false);
   const edgeUpdateSuccessful = useRef(true);
@@ -185,7 +187,7 @@ export default function Page({ view }: { view?: boolean }): JSX.Element {
 
   useEffect(() => {
     useFlowStore.setState({ autoSaveFlow });
-  });
+  }, [autoSaveFlow]);
 
   function handleUndo(e: KeyboardEvent) {
     if (!isWrappedWithClass(e, "noflow")) {
@@ -290,6 +292,7 @@ export default function Page({ view }: { view?: boolean }): JSX.Element {
 
   const undoAction = useShortcutsStore((state) => state.undo);
   const redoAction = useShortcutsStore((state) => state.redo);
+  const redoAltAction = useShortcutsStore((state) => state.redoAlt);
   const copyAction = useShortcutsStore((state) => state.copy);
   const duplicate = useShortcutsStore((state) => state.duplicate);
   const deleteAction = useShortcutsStore((state) => state.delete);
@@ -300,6 +303,8 @@ export default function Page({ view }: { view?: boolean }): JSX.Element {
   useHotkeys(undoAction, handleUndo);
   //@ts-ignore
   useHotkeys(redoAction, handleRedo);
+  //@ts-ignore
+  useHotkeys(redoAltAction, handleRedo);
   //@ts-ignore
   useHotkeys(groupAction, handleGroup);
   //@ts-ignore
@@ -335,7 +340,15 @@ export default function Page({ view }: { view?: boolean }): JSX.Element {
     // 👇 make moving the canvas undoable
     autoSaveFlow();
     updateCurrentFlow({ nodes });
-  }, [takeSnapshot, autoSaveFlow, nodes, edges, reactFlowInstance]);
+    setPositionDictionary({});
+  }, [
+    takeSnapshot,
+    autoSaveFlow,
+    nodes,
+    edges,
+    reactFlowInstance,
+    setPositionDictionary,
+  ]);
 
   const onSelectionDragStart: SelectionDragHandler = useCallback(() => {
     // 👇 make dragging a selection undoable
@@ -538,6 +551,7 @@ export default function Page({ view }: { view?: boolean }): JSX.Element {
             onReconnectEnd={onEdgeUpdateEnd}
             onNodeDragStart={onNodeDragStart}
             onSelectionDragStart={onSelectionDragStart}
+            elevateEdgesOnSelect={true}
             onSelectionEnd={onSelectionEnd}
             onSelectionStart={onSelectionStart}
             connectionRadius={30}
@@ -617,12 +631,14 @@ export default function Page({ view }: { view?: boolean }): JSX.Element {
               backgroundColor: `${shadowBoxBackgroundColor}`,
               opacity: 0.7,
               pointerEvents: "none",
+              // Prevent shadow-box from showing unexpectedly during initial renders
+              display: "none",
             }}
           ></div>
         </div>
       ) : (
         <div className="flex h-full w-full items-center justify-center">
-          <LoadingComponent remSize={30} />
+          <CustomLoader remSize={30} />
         </div>
       )}
     </div>
