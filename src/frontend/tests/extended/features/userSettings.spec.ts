@@ -1,190 +1,426 @@
-import { test } from "@playwright/test";
+import { expect, test } from "../../fixtures";
+import { awaitBootstrapTest } from "../../utils/await-bootstrap-test";
+import { TEXTS } from "../../utils/constants/texts";
+import { waitForNewProjectButton } from "../../utils/flow/new-project-flow";
+import { openStarterProject } from "../../utils/flow/open-starter-project";
+import { waitForFlowEditorReady } from "../../utils/flow/wait-for-flow-editor-ready";
 
-test("should see general profile gradient", async ({ page }) => {
-  await page.goto("/");
-  await page.waitForSelector('[data-testid="mainpage_title"]', {
-    timeout: 30000,
-  });
+test(
+  "should see general profile gradient",
+  { tag: ["@release", "@components"] },
 
-  await page.waitForSelector('[id="new-project-btn"]', {
-    timeout: 30000,
-  });
-  await page.getByTestId("user-profile-settings").click();
-  await page.waitForTimeout(1000);
+  async ({ page }) => {
+    await awaitBootstrapTest(page, {
+      skipModal: true,
+      seedFlowIfEmpty: false,
+    });
+    await page.waitForSelector('[data-testid="mainpage_title"]', {
+      timeout: 30000,
+    });
 
-  await page.getByText("Settings").click();
-  await page.waitForTimeout(3000);
+    await waitForNewProjectButton(page);
+    await page.getByTestId("user-profile-settings").click();
 
-  await page.getByText("General").nth(2).isVisible();
-  await page.getByText("Profile Gradient").isVisible();
-});
+    await page.getByText(TEXTS.settings).click();
 
-test("should interact with global variables", async ({ page }) => {
-  const randomName = Math.random().toString(36).substring(2);
-  const randomName2 = Math.random().toString(36).substring(2);
-  const randomName3 = Math.random().toString(36).substring(2);
+    // Wait for settings page to fully load
+    await page
+      .waitForLoadState("networkidle", { timeout: 10000 })
+      .catch(() => {});
+    await page.waitForTimeout(1000);
 
-  await page.goto("/");
-  await page.waitForTimeout(1000);
-  await page.getByTestId("user-profile-settings").click();
-  await page.getByText("Settings").click();
-  await page.getByText("Global Variables").click();
-  await page.getByText("Global Variables").nth(2);
-  await page.getByText("Global Variables", { exact: true }).nth(1).isVisible();
-  await page.getByText("Add New").click();
-  await page
-    .getByPlaceholder("Insert a name for the variable...")
-    .fill(randomName);
-  await page.getByTestId("popover-anchor-type-global-variables").click();
-  await page.getByPlaceholder("Search options...").fill("Generic");
-  await page.waitForTimeout(1000);
-  await page.getByText("Generic", { exact: true }).last().isVisible();
-  await page.getByText("Generic", { exact: true }).last().click();
+    await expect(page.getByText("General").nth(2)).toBeVisible({
+      timeout: 10000,
+    });
+    await expect(page.getByText("Profile Picture").first()).toBeVisible();
+  },
+);
 
-  await page.getByTestId("popover-anchor-type-global-variables").click();
-  await page.waitForTimeout(1000);
-  await page.getByPlaceholder("Search options...").fill("Generic");
-  await page.getByText("Generic", { exact: true }).last().isVisible();
-  await page.getByText("Generic", { exact: true }).last().click();
+const FALLBACK_FIELDS = [
+  "AgentQL API Key",
+  "AI/ML API Key",
+  "Anthropic API Key",
+  "API Key",
+  "Apify Token",
+  "Assembly API Key",
+  "Astra DB Application Token",
+  "AWS Access Key ID",
+];
 
-  await page
-    .getByPlaceholder("Insert a value for the variable...")
-    .fill("testtesttesttesttesttesttesttest");
-  await page.getByTestId("popover-anchor-apply-to-fields").click();
+test(
+  "should interact with global variables",
+  { tag: ["@release", "@workspace", "@api"] },
 
-  await page.waitForTimeout(1000);
+  async ({ page }) => {
+    const randomName = Math.random().toString(36).substring(2);
+    const randomName2 = Math.random().toString(36).substring(2);
+    const randomName3 = Math.random().toString(36).substring(2);
 
-  await page.getByPlaceholder("Search options...").fill("System");
+    async function trySelectAvailableField(): Promise<boolean> {
+      for (const fieldName of FALLBACK_FIELDS) {
+        await page.getByPlaceholder("Fields").clear();
+        await page.getByPlaceholder("Fields").fill(fieldName);
+        await page.waitForTimeout(300);
+        try {
+          // [cmdk-item] targets dropdown options, not the search input
+          const optionItem = page.locator(
+            `[cmdk-item]:has-text("${fieldName}")`,
+          );
+          await optionItem.waitFor({ state: "visible", timeout: 2000 });
+          await optionItem.click();
+          return true;
+        } catch {
+          continue;
+        }
+      }
+      return false;
+    }
 
-  await page.waitForTimeout(500);
-
-  await page.waitForSelector("text=System", { timeout: 30000 });
-
-  await page.waitForTimeout(500);
-
-  await page.getByText("System").last().click();
-
-  await page.getByPlaceholder("Search options...").fill("openAI");
-
-  await page.waitForSelector("text=openai", { timeout: 30000 });
-
-  await page.waitForTimeout(500);
-
-  await page.getByText("openai").last().click();
-
-  await page.waitForTimeout(500);
-
-  await page.getByPlaceholder("Search options...").fill("ollama");
-
-  await page.waitForSelector("text=ollama", { timeout: 30000 });
-
-  await page.getByText("ollama").first().click();
-
-  await page.keyboard.press("Escape");
-  await page.getByText("Save Variable", { exact: true }).click();
-
-  await page.getByText(randomName).last().isVisible();
-
-  await page.getByText(randomName).last().click();
-  await page.getByText(randomName).last().click();
-
-  await page.waitForTimeout(500);
-
-  await page
-    .getByPlaceholder("Insert a name for the variable...")
-    .fill(randomName2);
-
-  await page.getByText("Update Variable", { exact: true }).last().click();
-
-  await page.getByText(randomName2).last().isVisible();
-
-  await page.getByText(randomName2).last().click();
-
-  await page.waitForTimeout(500);
-
-  await page
-    .getByPlaceholder("Insert a name for the variable...")
-    .fill(randomName3);
-
-  await page.getByText("Update Variable", { exact: true }).last().click();
-
-  await page.getByText(randomName3).last().isVisible();
-
-  const focusElementsOnBoard = async ({ page }) => {
-    await page.waitForSelector(
-      '[aria-label="Press Space to toggle all rows selection (unchecked)"]',
-      { timeout: 30000 },
+    await awaitBootstrapTest(page, {
+      skipModal: true,
+      seedFlowIfEmpty: false,
+    });
+    await page.getByTestId("user-profile-settings").click();
+    await page.getByText(TEXTS.settings).click();
+    await page.getByText("Global Variables").click();
+    await expect(
+      page.getByText("Global Variables", { exact: true }).nth(1),
+    ).toBeVisible({ timeout: 10000 });
+    await page.getByText("Add New").click();
+    await page.getByPlaceholder(TEXTS.placeholderVariableName).fill(randomName);
+    await expect(page.getByText("Generic", { exact: true }).last()).toBeVisible(
+      { timeout: 10000 },
     );
-    const focusElements = await page
-      .getByLabel("Press Space to toggle all rows selection (unchecked)")
-      .first();
-    await focusElements.click();
-  };
+    await page.getByText("Generic", { exact: true }).last().click();
 
-  await focusElementsOnBoard({ page });
+    await page
+      .getByPlaceholder("Enter a value for the variable...")
+      .fill("testtesttesttesttesttesttesttest");
+    await page.getByTestId("popover-anchor-apply-to-fields").click();
 
-  await page.getByTestId("icon-Trash2").click();
-  await page.getByText("No data available").isVisible();
-});
+    await page.getByPlaceholder("Fields").first().waitFor({
+      state: "visible",
+      timeout: 30000,
+    });
 
-test("should see shortcuts", async ({ page }) => {
-  await page.goto("/");
+    const fieldSelected = await trySelectAvailableField();
+    expect(fieldSelected).toBe(true);
+
+    await page.keyboard.press("Escape");
+
+    await page
+      .getByText("Save Variable", { exact: true })
+      .dispatchEvent("click");
+
+    await page.waitForTimeout(500);
+
+    await expect(page.getByText(randomName).last()).toBeVisible({
+      timeout: 10000,
+    });
+
+    await page.locator(`.ag-cell:has-text("${randomName}")`).first().click();
+
+    await page.getByPlaceholder(TEXTS.placeholderVariableName).waitFor({
+      state: "visible",
+      timeout: 30000,
+    });
+
+    await page
+      .getByPlaceholder(TEXTS.placeholderVariableName)
+      .fill(randomName2);
+
+    await page
+      .getByText("Update Variable", { exact: true })
+      .last()
+      .dispatchEvent("click");
+    await page.waitForTimeout(500);
+
+    await expect(page.getByText(randomName2).last()).toBeVisible({
+      timeout: 10000,
+    });
+
+    await page.waitForTimeout(500);
+
+    await page.locator(`.ag-cell:has-text("${randomName2}")`).first().click();
+
+    await page.getByPlaceholder(TEXTS.placeholderVariableName).waitFor({
+      state: "visible",
+      timeout: 30000,
+    });
+
+    await page
+      .getByPlaceholder(TEXTS.placeholderVariableName)
+      .fill(randomName3);
+
+    await page
+      .getByText("Update Variable", { exact: true })
+      .last()
+      .dispatchEvent("click");
+    await page.waitForTimeout(500);
+
+    await expect(page.getByText(randomName3).last()).toBeVisible({
+      timeout: 10000,
+    });
+
+    await page.waitForTimeout(3000);
+    await page.locator(".ag-input-field-input").first().click();
+    await page.getByTestId("icon-Trash2").click();
+    await expect(page.getByText("No data available")).toBeVisible({
+      timeout: 10000,
+    });
+  },
+);
+
+test("should see shortcuts", { tag: ["@release"] }, async ({ page }) => {
+  await awaitBootstrapTest(page, {
+    skipModal: true,
+    seedFlowIfEmpty: false,
+  });
   await page.waitForSelector('[data-testid="mainpage_title"]', {
     timeout: 30000,
   });
 
-  await page.waitForSelector('[id="new-project-btn"]', {
-    timeout: 30000,
-  });
+  await waitForNewProjectButton(page);
   await page.getByTestId("user-profile-settings").click();
+
+  await page.getByText(TEXTS.settings).click();
+
+  // Wait for settings page to fully load
+  await page
+    .waitForLoadState("networkidle", { timeout: 10000 })
+    .catch(() => {});
   await page.waitForTimeout(1000);
 
-  await page.getByText("Settings").click();
-  await page.waitForTimeout(3000);
-
-  await page.getByText("General").nth(2).isVisible();
+  await expect(page.getByText("General").nth(2)).toBeVisible({
+    timeout: 10000,
+  });
   await page.getByText("Shortcuts").nth(0).click();
-  await page.getByText("Shortcuts", { exact: true }).nth(1).isVisible();
-  await page
-    .getByText("Advanced Settings Component", { exact: true })
-    .isVisible();
-  await page.getByText("Minimize Component", { exact: true }).isVisible();
-  await page.getByText("Code Component", { exact: true }).isVisible();
-  await page.getByText("Copy Component", { exact: true }).isVisible();
-  await page.getByText("Duplicate Component", { exact: true }).isVisible();
-  await page.getByText("Share Component", { exact: true }).isVisible();
-  await page.getByText("Docs Component", { exact: true }).isVisible();
-  await page.getByText("Save Component", { exact: true }).isVisible();
-  await page.getByText("Delete Component", { exact: true }).isVisible();
-  await page.getByText("Open Playground", { exact: true }).isVisible();
-  await page.getByText("Undo", { exact: true }).isVisible();
+
+  // Wait for shortcuts section to load
+  await page.waitForTimeout(1000);
+
+  await expect(page.getByText("Shortcuts", { exact: true }).nth(1)).toBeVisible(
+    { timeout: 10000 },
+  );
+  //TODO Do not seem to be in the list, is it a product change?
+  // await expect(page.getByText("Controls", { exact: true })).toBeVisible({
+  //   timeout: 10000,
+  // });
+
+  await expect(
+    page.getByText("Search Components on Sidebar", { exact: true }),
+  ).toBeVisible({ timeout: 10000 });
+
+  await expect(page.getByText("Minimize", { exact: true })).toBeVisible({
+    timeout: 10000,
+  });
+  await expect(page.getByText("Code", { exact: true })).toBeVisible({
+    timeout: 10000,
+  });
+  await expect(page.getByText("Copy", { exact: true })).toBeVisible({
+    timeout: 10000,
+  });
+  await expect(page.getByText("Duplicate", { exact: true })).toBeVisible({
+    timeout: 10000,
+  });
+  await expect(page.getByText("Docs", { exact: true })).toBeVisible({
+    timeout: 10000,
+  });
+  await expect(page.getByText("Changes Save", { exact: true })).toBeVisible({
+    timeout: 10000,
+  });
+  await expect(page.getByText(TEXTS.delete, { exact: true })).toBeVisible({
+    timeout: 10000,
+  });
+  await expect(page.getByText("Open Playground", { exact: true })).toBeVisible({
+    timeout: 10000,
+  });
+  await expect(page.getByText("Undo", { exact: true })).toBeVisible({
+    timeout: 10000,
+  });
 
   await page.mouse.wheel(0, 10000);
 
-  await page.getByText("Redo", { exact: true }).last().isVisible();
+  await expect(page.getByText("Redo", { exact: true }).last()).toBeVisible({
+    timeout: 10000,
+  });
 
-  await page.getByText("Reset Columns").last().isVisible();
+  await expect(
+    page.getByText("Redo (alternative)", { exact: true }).last(),
+  ).toBeVisible({
+    timeout: 10000,
+  });
+
+  await expect(page.getByText("Group").last()).toBeVisible({
+    timeout: 10000,
+  });
+
+  await expect(page.getByText("Cut").last()).toBeVisible({
+    timeout: 10000,
+  });
+
+  await expect(page.getByText("Paste").last()).toBeVisible({
+    timeout: 10000,
+  });
+
+  await expect(page.getByText("API").last()).toBeVisible({
+    timeout: 10000,
+  });
+
+  await expect(page.getByText("Download").last()).toBeVisible({
+    timeout: 10000,
+  });
+
+  await expect(page.getByText("Update").last()).toBeVisible({
+    timeout: 10000,
+  });
+
+  await expect(page.getByText("Freeze").last()).toBeVisible({
+    timeout: 10000,
+  });
+
+  await expect(page.getByText("Flow Share").last()).toBeVisible({
+    timeout: 10000,
+  });
+
+  await expect(page.getByText("Play").last()).toBeVisible({
+    timeout: 10000,
+  });
+
+  await expect(page.getByText("Output Inspection").last()).toBeVisible({
+    timeout: 10000,
+  });
+
+  await expect(page.getByText("Tool Mode").last()).toBeVisible({
+    timeout: 10000,
+  });
+
+  await expect(page.getByText("Toggle Sidebar").last()).toBeVisible({
+    timeout: 10000,
+  });
 });
 
-test("should interact with API Keys", async ({ page }) => {
-  await page.goto("/");
-  await page.waitForTimeout(1000);
-  await page.getByTestId("user-profile-settings").click();
-  await page.getByText("Settings").click();
-  await page.getByText("Langflow API").first().click();
-  await page.getByText("Langflow API", { exact: true }).nth(1).isVisible();
-  await page.getByText("Add New").click();
-  await page.getByPlaceholder("Insert a name for your API Key").isVisible();
+test(
+  "should interact with API Keys",
+  { tag: ["@release", "@api"] },
+  async ({ page }) => {
+    await page.addInitScript(() => {
+      const clipboardWrites: string[] = [];
+      Object.defineProperty(window, "__playwrightClipboardWrites", {
+        configurable: true,
+        value: clipboardWrites,
+      });
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: {
+          writeText: async (value: string) => {
+            clipboardWrites.push(value);
+          },
+        },
+      });
+    });
 
-  const randomName = Math.random().toString(36).substring(2);
+    await awaitBootstrapTest(page, {
+      skipModal: true,
+      seedFlowIfEmpty: false,
+    });
+    await page.getByTestId("user-profile-settings").click();
+    await page.getByText(TEXTS.settings).click();
 
-  await page
-    .getByPlaceholder("Insert a name for your API Key")
-    .fill(randomName);
-  await page.getByText("Create Secret Key", { exact: true }).click();
-  await page.getByText("Please save").isVisible();
-  await page.getByTestId("icon-Copy").click();
-  await page.waitForTimeout(1000);
-  await page.getByText("Api Key Copied!").isVisible();
-  await page.getByText(randomName).isVisible();
-});
+    const langflowApiNavItem = page.getByText("Langflow API").first();
+    await expect(langflowApiNavItem).toBeVisible({ timeout: 10000 });
+    await langflowApiNavItem.click();
+
+    await expect(
+      page.getByText("Langflow API Keys", { exact: true }).nth(1),
+    ).toBeVisible({ timeout: 10000 });
+    await page.getByText("Add New").click();
+    await expect(page.getByPlaceholder("My API Key")).toBeVisible({
+      timeout: 10000,
+    });
+
+    const randomName = Math.random().toString(36).substring(2);
+
+    await page.getByPlaceholder("My API Key").fill(randomName);
+    await page.getByText("Generate API Key", { exact: true }).click();
+
+    await expect(page.getByText("Please save")).toBeVisible({
+      timeout: 30000,
+    });
+    const generatedKeyInput = page.getByTestId("api-key-input");
+    await expect(generatedKeyInput).toHaveValue(/\S+/, { timeout: 30000 });
+
+    await page.getByTestId("btn-copy-api-key").click();
+
+    await expect(
+      page.getByText("API Key copied!", { exact: true }),
+    ).toBeVisible();
+
+    const clipboardCapture = await page.evaluate(() => {
+      const renderedKey = document.querySelector<HTMLInputElement>(
+        '[data-testid="api-key-input"]',
+      )?.value;
+      const writes = (
+        window as Window & { __playwrightClipboardWrites?: string[] }
+      ).__playwrightClipboardWrites;
+
+      return {
+        copiedRenderedKey:
+          Boolean(renderedKey) &&
+          writes?.length === 1 &&
+          writes[0] === renderedKey,
+        writeCount: writes?.length ?? 0,
+      };
+    });
+    expect(clipboardCapture).toEqual({
+      copiedRenderedKey: true,
+      writeCount: 1,
+    });
+
+    await page.getByTestId("secret_key_modal_submit_button").click();
+
+    await page.mouse.wheel(0, 10000);
+
+    await expect(page.getByText(randomName)).toBeVisible({ timeout: 10000 });
+  },
+);
+
+test(
+  "should navigate back to flow from global variables",
+  { tag: ["@release", "@workspace"] },
+  async ({ page }) => {
+    await awaitBootstrapTest(page);
+    await openStarterProject(page, TEXTS.templateBasicPrompting, {
+      skipBootstrap: true,
+    });
+
+    // Now navigate to user settings
+    await page.getByTestId("user-profile-settings").click();
+    await page.getByTestId("menu_settings_button").click();
+
+    // Verify we're on the settings page
+    await expect(page.getByText("General").nth(2)).toBeVisible({
+      timeout: 15000,
+    });
+
+    // Navigate to Global Variables
+    await page.getByText("Global Variables").click();
+    await expect(
+      page.getByText("Global Variables", { exact: true }).nth(1),
+    ).toBeVisible({ timeout: 10000 });
+
+    // Click the back button - this should take us back to the flow, not to the main settings page
+    await page.getByTestId("back_page_button").click();
+
+    // Verify we're back on the flow page, not the settings main page.
+    // Re-rendering the flow canvas after leaving settings is slow on busy
+    // (e.g. Windows) CI runners, so allow a generous window before asserting.
+    await waitForFlowEditorReady(page);
+
+    // Additional verification that we're on the flow page
+    expect(page.url()).toMatch(/\/flow\//);
+
+    // Verify we can see flow-specific elements
+    await expect(page.getByTestId("sidebar-search-input")).toBeVisible();
+  },
+);

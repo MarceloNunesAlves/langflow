@@ -1,4 +1,4 @@
-import { useQueryFunctionType } from "@/types/api";
+import type { useQueryFunctionType } from "@/types/api";
 import { api } from "../../api";
 import { getURL } from "../../helpers/constants";
 import { UseRequestProcessor } from "../../services/request-processor";
@@ -12,6 +12,7 @@ export interface IApiKeysDataArray {
   api_key: string;
   user_id: string;
   created_at: string;
+  expires_at: string | null;
 }
 
 interface IApiQueryResponse {
@@ -26,6 +27,7 @@ export const useGetApiKeysQuery: useQueryFunctionType<
 > = (options) => {
   const { query } = UseRequestProcessor();
 
+  //@TODO: Request API key from DSLF endpoint
   const getApiKeysFn = async () => {
     return await api.get<IApiQueryResponse>(`${getURL("API_KEY")}/`);
   };

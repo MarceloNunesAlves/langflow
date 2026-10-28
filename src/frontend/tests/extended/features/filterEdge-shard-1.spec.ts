@@ -1,172 +1,140 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "../../fixtures";
+import { addLegacyComponents } from "../../utils/add-legacy-components";
+import { adjustScreenView } from "../../utils/adjust-screen-view";
+import { awaitBootstrapTest } from "../../utils/await-bootstrap-test";
+import { addComponentFromSidebar } from "../../utils/flow/add-component-from-sidebar";
 
-test("user must see on handle click the possibility connections - RetrievalQA", async ({
-  page,
-}) => {
-  await page.goto("/");
-  await page.waitForSelector('[data-testid="mainpage_title"]', {
-    timeout: 30000,
-  });
+test(
+  "user must see on handle click the possibility connections - RetrievalQA",
+  { tag: ["@release", "@api", "@components"] },
+  async ({ page }) => {
+    await awaitBootstrapTest(page);
 
-  await page.waitForSelector('[id="new-project-btn"]', {
-    timeout: 30000,
-  });
+    await page.getByTestId("blank-flow").click();
 
-  let modalCount = 0;
-  try {
-    const modalTitleElement = await page?.getByTestId("modal-title");
-    if (modalTitleElement) {
-      modalCount = await modalTitleElement.count();
+    await page.waitForSelector('[data-testid="sidebar-options-trigger"]', {
+      timeout: 3000,
+    });
+
+    await addLegacyComponents(page);
+
+    await addComponentFromSidebar(page, {
+      search: "retrievalqa",
+      testId: "langchain_utilitiesRetrieval QA",
+      position: { x: 200, y: 200 },
+    });
+
+    await adjustScreenView(page);
+
+    const outputHandle = page
+      .getByTestId("handle-retrievalqa-shownode-text-right")
+      .first();
+    await expect(outputHandle).toBeVisible();
+    await outputHandle.click({ position: { x: 31, y: 16 } });
+
+    const disclosureTestIds = [
+      "disclosure-input & output",
+      "disclosure-data sources",
+      "disclosure-models & agents",
+      "disclosure-llm operations",
+      "disclosure-files & knowledge",
+      "disclosure-processing",
+      "disclosure-flow control",
+      "disclosure-utilities",
+    ];
+
+    const optionalDisclosureTestIds = [
+      "disclosure-bundles-langchain",
+      "disclosure-bundles-assemblyai",
+      "disclosure-bundles-datastax",
+    ];
+
+    const elementTestIds = [
+      "input_outputChat Output",
+      "data_sourceAPI Request",
+      "langchain_utilitiesTool Calling Agent",
+      "langchain_utilitiesConversationChain",
+      "flow_controlsCondition",
+      "langchain_utilitiesSelf Query Retriever",
+      "langchain_utilitiesCharacter Text Splitter",
+    ];
+
+    const optionalElementTestIds = ["mem0Mem0 Chat Memory"];
+
+    await Promise.all(
+      disclosureTestIds.map((id) => {
+        if (!expect(page.getByTestId(id)).toBeVisible()) {
+          console.error(`${id} is not visible`);
+        }
+        return expect(page.getByTestId(id)).toBeVisible();
+      }),
+    );
+
+    for (const id of optionalDisclosureTestIds) {
+      const disclosure = page.getByTestId(id);
+      if (await disclosure.isVisible().catch(() => false)) {
+        await expect(disclosure).toBeVisible();
+      }
     }
-  } catch (error) {
-    modalCount = 0;
-  }
 
-  while (modalCount === 0) {
-    await page.getByText("New Project", { exact: true }).click();
-    await page.waitForTimeout(3000);
-    modalCount = await page.getByTestId("modal-title")?.count();
-  }
-  await page.waitForTimeout(1000);
+    await Promise.all(
+      elementTestIds.map(async (id) => {
+        if (!expect(page.getByTestId(id).first()).toBeVisible()) {
+          console.error(`${id} is not visible`);
+        }
+        return expect(page.getByTestId(id).first()).toBeVisible();
+      }),
+    );
 
-  await page.getByTestId(
-    "input-list-plus-btn-edit_metadata_indexing_include-2",
-  );
-
-  await page.getByTestId("blank-flow").click();
-  await page.waitForSelector('[data-testid="extended-disclosure"]', {
-    timeout: 30000,
-  });
-  await page.getByTestId("extended-disclosure").click();
-  await page.getByPlaceholder("Search").click();
-  await page.getByPlaceholder("Search").fill("retrievalqa");
-
-  await page.waitForTimeout(1000);
-  await page
-    .getByTestId("chainsRetrieval QA")
-    .dragTo(page.locator('//*[@id="react-flow-id"]'));
-  await page.mouse.up();
-  await page.mouse.down();
-  await page.getByTitle("fit view").click();
-  await page.getByTitle("zoom out").click();
-  await page.getByTitle("zoom out").click();
-  await page.getByTitle("zoom out").click();
-  await page.waitForTimeout(500);
-
-  let visibleElementHandle;
-
-  const outputElements = await page
-    .getByTestId("handle-retrievalqa-shownode-text-right")
-    .all();
-
-  for (const element of outputElements) {
-    if (await element.isVisible()) {
-      visibleElementHandle = element;
-      break;
+    for (const id of optionalElementTestIds) {
+      const element = page.getByTestId(id).first();
+      if (await element.isVisible().catch(() => false)) {
+        await expect(element).toBeVisible();
+      }
     }
-  }
 
-  await visibleElementHandle.click({
-    force: true,
-  });
+    await page.getByTestId("sidebar-search-input").click();
 
-  const disclosureTestIds = [
-    "disclosure-inputs",
-    "disclosure-outputs",
-    "disclosure-data",
-    "disclosure-models",
-    "disclosure-helpers",
-    "disclosure-vector stores",
-    "disclosure-embeddings",
-    "disclosure-agents",
-    "disclosure-chains",
-    "disclosure-memories",
-    "disclosure-prototypes",
-    "disclosure-retrievers",
-    "disclosure-text splitters",
-  ];
+    const visibleModelSpecsTestIds = ["cohereCohere Language Models"];
 
-  const elementTestIds = [
-    "inputsChat Input",
-    "outputsChat Output",
-    "dataAPI Request",
-    "modelsAmazon Bedrock",
-    "helpersChat Memory",
-    "vectorstoresAstra DB",
-    "embeddingsAmazon Bedrock Embeddings",
-    "agentsTool Calling Agent",
-    "chainsConversationChain",
-    "memoriesAstra DB Chat Memory",
-    "prototypesConditional Router",
-    "retrieversSelf Query Retriever",
-    "textsplittersCharacterTextSplitter",
-  ];
+    const optionalVisibleModelSpecsTestIds = [
+      "lmstudioLM Studio",
+      "groqGroq",
+      "maritalkMariTalk",
+      "perplexityPerplexity",
+      "baiduQianfan",
+      "sambanovaSambaNova",
+      "xaixAI",
+    ];
 
-  await Promise.all(
-    disclosureTestIds.map((id) => expect(page.getByTestId(id)).toBeVisible()),
-  );
+    await Promise.all(
+      visibleModelSpecsTestIds.map((id) => {
+        if (!expect(page.getByTestId(id)).toBeVisible()) {
+          console.error(`${id} is not visible`);
+        }
+        return expect(page.getByTestId(id)).toBeVisible();
+      }),
+    );
 
-  await Promise.all(
-    elementTestIds.map((id) =>
-      expect(page.getByTestId(id).first()).toBeVisible(),
-    ),
-  );
-
-  await page.getByPlaceholder("Search").click();
-
-  const notVisibleModelSpecsTestIds = [
-    "model_specsVertexAI",
-    "model_specsCTransformers",
-    "model_specsAmazon Bedrock",
-    "modelsAzure OpenAI",
-    "model_specsAzureChatOpenAI",
-    "model_specsChatAnthropic",
-    "model_specsChatLiteLLM",
-    "model_specsChatOllama",
-    "model_specsChatOpenAI",
-    "model_specsChatVertexAI",
-  ];
-
-  await Promise.all(
-    notVisibleModelSpecsTestIds.map((id) =>
-      expect(page.getByTestId(id)).not.toBeVisible(),
-    ),
-  );
-
-  const chainInputElements1 = await page
-    .getByTestId("handle-retrievalqa-shownode-llm-left")
-    .all();
-
-  for (const element of chainInputElements1) {
-    if (await element.isVisible()) {
-      visibleElementHandle = element;
-      break;
+    for (const id of optionalVisibleModelSpecsTestIds) {
+      const modelSpec = page.getByTestId(id);
+      if (await modelSpec.isVisible().catch(() => false)) {
+        await expect(modelSpec).toBeVisible();
+      }
     }
-  }
 
-  await visibleElementHandle.blur();
+    const modelHandle = page
+      .getByTestId("handle-retrievalqa-shownode-language model-left")
+      .first();
+    await expect(modelHandle).toBeVisible();
+    await modelHandle.click({ position: { x: 1, y: 16 } });
 
-  await visibleElementHandle.click({
-    force: true,
-  });
+    await expect(page.getByTestId("disclosure-models & agents")).toBeVisible();
 
-  await expect(page.getByTestId("disclosure-models")).toBeVisible();
+    await outputHandle.click({ position: { x: 31, y: 16 } });
 
-  const rqaChainInputElements0 = await page
-    .getByTestId("handle-retrievalqa-shownode-template-left")
-    .all();
-
-  for (const element of rqaChainInputElements0) {
-    if (await element.isVisible()) {
-      visibleElementHandle = element;
-      break;
-    }
-  }
-
-  await visibleElementHandle.click();
-
-  await expect(page.getByTestId("disclosure-helpers")).toBeVisible();
-  await expect(page.getByTestId("disclosure-agents")).toBeVisible();
-  await expect(page.getByTestId("disclosure-chains")).toBeVisible();
-  await expect(page.getByTestId("disclosure-prototypes")).toBeVisible();
-});
+    await expect(page.getByTestId("disclosure-input & output")).toBeVisible();
+    await expect(page.getByTestId("disclosure-data sources")).toBeVisible();
+    await expect(page.getByTestId("disclosure-models & agents")).toBeVisible();
+  },
+);

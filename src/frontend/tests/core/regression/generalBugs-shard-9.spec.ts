@@ -1,104 +1,78 @@
-import { expect, test } from "@playwright/test";
-import * as dotenv from "dotenv";
-import path from "path";
+import { expect, test } from "../../fixtures";
+import { addLegacyComponents } from "../../utils/add-legacy-components";
+import { adjustScreenView } from "../../utils/adjust-screen-view";
+import { awaitBootstrapTest } from "../../utils/await-bootstrap-test";
+import { configureLoopbackOpenAI } from "../../utils/configure-loopback-openai";
+import { TEXTS } from "../../utils/constants/texts";
+import { addComponentFromSidebar } from "../../utils/flow/add-component-from-sidebar";
+import { sendPlaygroundMessage } from "../../utils/playground/send-playground-message";
+import { seedLoopbackProvider } from "../../utils/seed-loopback-provider";
 
-test("memory should work as expect", async ({ page }) => {
-  test.skip(
-    !process?.env?.OPENAI_API_KEY,
-    "OPENAI_API_KEY required to run this test",
-  );
+test(
+  "user should be able to use chat memory as expected",
+  { tag: ["@release", "@workspace", "@components"] },
+  async ({ page }) => {
+    await seedLoopbackProvider(page);
+    await awaitBootstrapTest(page);
 
-  if (!process.env.CI) {
-    dotenv.config({ path: path.resolve(__dirname, "../../.env") });
-  }
+    await page.getByTestId("side_nav_options_all-templates").click();
+    await page
+      .getByRole("heading", { name: TEXTS.templateBasicPrompting })
+      .click();
 
-  await page.goto("/");
+    await adjustScreenView(page);
 
-  await page.waitForTimeout(1000);
+    await addLegacyComponents(page);
 
-  let modalCount = 0;
-  try {
-    const modalTitleElement = await page?.getByTestId("modal-title");
-    if (modalTitleElement) {
-      modalCount = await modalTitleElement.count();
+    // Locate the canvas element
+    const canvas = page.locator("#react-flow-id"); // Update the selector if needed
+
+    // Get the bounding box of the canvas to determine its position
+    const canvasBox = await canvas.boundingBox();
+    if (!canvasBox) {
+      throw new Error("Canvas element bounding box not found");
     }
-  } catch (error) {
-    modalCount = 0;
-  }
 
-  while (modalCount === 0) {
-    await page.getByText("New Project", { exact: true }).click();
-    await page.waitForTimeout(3000);
-    modalCount = await page.getByTestId("modal-title")?.count();
-  }
+    // Starting point (center of the canvas)
+    const startX = canvasBox.x + canvasBox.width / 2;
+    const startY = canvasBox.y + canvasBox.height / 2;
 
-  await page.getByRole("heading", { name: "Basic Prompting" }).click();
-  await page.waitForTimeout(1000);
+    // End point (move 600 pixels to the right)
+    const endX = startX + 600;
+    const endY = startY;
 
-  await page.getByTitle("fit view").click();
+    // Hover over the canvas to focus it
+    await canvas.hover();
 
-  await page.getByTestId("extended-disclosure").click();
-  await page.getByPlaceholder("Search").click();
-  await page.getByPlaceholder("Search").fill("chat memory");
+    // Start the drag operation
+    await page.mouse.move(startX, startY);
+    await page.mouse.down();
 
-  // Locate the canvas element
-  const canvas = page.locator("#react-flow-id"); // Update the selector if needed
+    // Move to the new position
+    await page.mouse.move(endX, endY);
 
-  // Get the bounding box of the canvas to determine its position
-  const canvasBox = await canvas.boundingBox();
-  if (!canvasBox) {
-    throw new Error("Canvas element bounding box not found");
-  }
+    // Release the mouse button to finish the drag
+    await page.mouse.up();
 
-  // Starting point (center of the canvas)
-  const startX = canvasBox.x + canvasBox.width / 2;
-  const startY = canvasBox.y + canvasBox.height / 2;
+    await configureLoopbackOpenAI(page, {
+      skipAdjustScreenView: true,
+    });
 
-  // End point (move 300 pixels to the right)
-  const endX = startX + 300;
-  const endY = startY;
+    // ConfigureLoopbackOpenAI reloads the persisted graph. Add Message History
+    // afterwards so an in-flight autosave cannot be overwritten by that
+    // deterministic provider patch.
+    await addComponentFromSidebar(page, {
+      search: "message history",
+      testId: "models_and_agentsMessage History",
+      hoverAdd: true,
+      addButtonSlug: "message-history",
+    });
+    const memoryNode = page.getByRole("application", {
+      name: "Message History node",
+    });
+    await expect(memoryNode).toBeAttached();
 
-  // Hover over the canvas to focus it
-  await canvas.hover();
-
-  // Start the drag operation
-  await page.mouse.move(startX, startY);
-  await page.mouse.down();
-
-  // Move to the new position
-  await page.mouse.move(endX, endY);
-
-  // Release the mouse button to finish the drag
-  await page.mouse.up();
-
-  await page
-    .getByTestId("helpersChat Memory")
-    .first()
-    .dragTo(page.locator('//*[@id="react-flow-id"]'));
-
-  await page.mouse.up();
-  await page.mouse.down();
-
-  await page.waitForTimeout;
-
-  await page.getByTitle("fit view").click();
-
-  let outdatedComponents = await page.getByTestId("icon-AlertTriangle").count();
-
-  while (outdatedComponents > 0) {
-    await page.getByTestId("icon-AlertTriangle").first().click();
-    await page.waitForTimeout(1000);
-    outdatedComponents = await page.getByTestId("icon-AlertTriangle").count();
-  }
-
-  await page
-    .getByTestId("popover-anchor-input-api_key")
-    .fill(process.env.OPENAI_API_KEY ?? "");
-
-  await page.getByTestId("dropdown_str_model_name").click();
-  await page.getByTestId("gpt-4o-1-option").click();
-
-  const prompt = `
+    const prompt = `
 {context}
 
 User: {user_input}
@@ -106,66 +80,52 @@ User: {user_input}
 AI:
   `;
 
-  await page
-    .getByTestId("promptarea_prompt_template-ExternalLink")
-    .nth(0)
-    .click();
+    await page.getByTestId("title-Prompt Template").last().click();
+    await page.getByTestId("button_open_prompt_modal").nth(0).click();
 
-  await page.getByTestId("modal-promptarea_prompt_template").fill(prompt);
-  await page.getByText("Edit Prompt", { exact: true }).click();
-  await page.getByText("Check & Save").last().click();
+    await page.getByTestId("modal-promptarea_prompt_template").fill(prompt);
+    await page.getByText(TEXTS.editPrompt, { exact: true }).click();
+    await page.getByText(TEXTS.checkAndSave).last().click();
 
-  //connection 1
-  const elementChatMemoryOutput = await page
-    .getByTestId("handle-memory-shownode-messages (text)-right")
-    .first();
-  await elementChatMemoryOutput.hover();
-  await page.mouse.down();
+    await adjustScreenView(page);
 
-  const promptInput = await page.getByTestId(
-    "handle-prompt-shownode-context-left",
-  );
+    //connection 1
+    await memoryNode
+      .getByTestId("handle-memory-shownode-messages-right")
+      .click();
 
-  await promptInput.hover();
-  await page.mouse.up();
+    await page.getByTestId("handle-prompt-shownode-context-left").click();
 
-  await page.locator('//*[@id="react-flow-id"]').hover();
+    await page.locator('//*[@id="react-flow-id"]').hover();
 
-  await page.waitForTimeout(1000);
+    await page
+      .getByRole("button", { name: TEXTS.playground, exact: true })
+      .click();
 
-  await page.getByText("Playground", { exact: true }).click();
+    await page.waitForSelector('[data-testid="button-send"]', {
+      timeout: 100000,
+    });
 
-  await page.waitForSelector('[data-testid="icon-LucideSend"]', {
-    timeout: 100000,
-  });
+    await sendPlaygroundMessage(
+      page,
+      "hi, my car is blue and I like to eat pizza",
+    );
+    await sendPlaygroundMessage(
+      page,
+      "what color is my car and what do I like to eat?",
+    );
 
-  await page
-    .getByPlaceholder("Send a message...")
-    .fill("hi, my car is blue and I like to eat pizza");
+    // Wait for the first chat message element to be available
+    const firstChatMessage = page.getByTestId("div-chat-message").nth(0);
+    await firstChatMessage.waitFor({ state: "visible", timeout: 10000 });
 
-  await page.getByTestId("icon-LucideSend").click();
+    // Get the text from the second message (the response to the question about car color and food)
+    const secondChatMessage = page.getByTestId("div-chat-message").nth(1);
+    await secondChatMessage.waitFor({ state: "visible", timeout: 10000 });
+    const memoryResponseText = await secondChatMessage.textContent();
 
-  await page.waitForSelector("text=AI", { timeout: 30000 });
-
-  await page
-    .getByPlaceholder("Send a message...")
-    .fill("what color is my car and what do I like to eat?");
-
-  await page.getByTestId("icon-LucideSend").click();
-
-  await page.waitForTimeout(400);
-
-  const textLocator = page.locator("text=AI");
-  await textLocator.nth(6).waitFor({ timeout: 30000 });
-  await expect(textLocator.nth(1)).toBeVisible();
-
-  await page.waitForTimeout(3000);
-
-  const memoryResponseText = await page
-    .locator(".form-modal-chat-text")
-    .nth(1)
-    .allTextContents();
-
-  expect(memoryResponseText[0].includes("pizza")).toBeTruthy();
-  expect(memoryResponseText[0].includes("blue")).toBeTruthy();
-});
+    expect(memoryResponseText).not.toBeNull();
+    expect(memoryResponseText?.includes("pizza")).toBeTruthy();
+    expect(memoryResponseText?.includes("blue")).toBeTruthy();
+  },
+);

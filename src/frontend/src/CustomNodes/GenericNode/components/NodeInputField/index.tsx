@@ -1,21 +1,33 @@
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
+import { useShallow } from "zustand/react/shallow";
 import useHandleNodeClass from "@/CustomNodes/hooks/use-handle-node-class";
+import { classNameFromType } from "@/CustomNodes/utils/class-name-from-type";
+import { ActionPickerAddButton } from "@/components/core/parameterRenderComponent/components/actionPickerComponent/AddButton";
+import { ActionPickerAddingContext } from "@/components/core/parameterRenderComponent/components/actionPickerComponent/addingContext";
+import type { NodeInfoType } from "@/components/core/parameterRenderComponent/types";
 import { usePostTemplateValue } from "@/controllers/API/queries/nodes/use-post-template-value";
 import {
   CustomParameterComponent,
+  CustomParameterLabel,
   getCustomParameterTitle,
 } from "@/customization/components/custom-parameter";
-import { useEffect, useRef } from "react";
-import { default as IconComponent } from "../../../../components/genericIconComponent";
-import ShadTooltip from "../../../../components/shadTooltipComponent";
-import { LANGFLOW_SUPPORTED_TYPES } from "../../../../constants/constants";
+import { useIsAutoLogin } from "@/hooks/use-is-auto-login";
+import useAuthStore from "@/stores/authStore";
+import { cn } from "@/utils/utils";
+import { default as IconComponent } from "../../../../components/common/genericIconComponent";
+import ShadTooltip from "../../../../components/common/shadTooltipComponent";
+import {
+  FLEX_VIEW_TYPES,
+  ICON_STROKE_WIDTH,
+} from "../../../../constants/constants";
 import useFlowStore from "../../../../stores/flowStore";
 import { useTypesStore } from "../../../../stores/typesStore";
-import { NodeInputFieldComponentType } from "../../../../types/components";
-import { scapedJSONStringfy } from "../../../../utils/reactflowUtils";
+import type { NodeInputFieldComponentType } from "../../../../types/components";
 import useFetchDataOnMount from "../../../hooks/use-fetch-data-on-mount";
 import useHandleOnNewValue from "../../../hooks/use-handle-new-value";
-import NodeInputInfo from "../NodeInputInfo";
 import HandleRenderComponent from "../handleRenderComponent";
+import NodeInputInfo from "../NodeInputInfo";
 
 export default function NodeInputField({
   id,
@@ -27,13 +39,29 @@ export default function NodeInputField({
   name = "",
   required = false,
   optionalHandle = null,
+  lastInput = false,
   info = "",
   proxy,
   showNode,
+  colorName,
+  isToolMode = false,
+  isPrimaryInput = false,
+  displayHandle = false,
+  minimizedHandleTop,
 }: NodeInputFieldComponentType): JSX.Element {
+  const { t } = useTranslation();
   const ref = useRef<HTMLDivElement>(null);
-  const nodes = useFlowStore((state) => state.nodes);
-  const edges = useFlowStore((state) => state.edges);
+  const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
+  const isAutoLogin = useIsAutoLogin();
+  const shouldDisplayApiKey = isAuthenticated && !isAutoLogin;
+
+  const { currentFlowId, currentFlowName } = useFlowStore(
+    useShallow((state) => ({
+      currentFlowId: state.currentFlow?.id,
+      currentFlowName: state.currentFlow?.name,
+    })),
+  );
+
   const myData = useTypesStore((state) => state.data);
   const postTemplateValue = usePostTemplateValue({
     node: data.node!,
@@ -41,13 +69,9 @@ export default function NodeInputField({
     parameterId: name,
   });
   const setFilterEdge = useFlowStore((state) => state.setFilterEdge);
-  const { handleNodeClass } = useHandleNodeClass(data.id);
-
-  let disabled =
-    edges.some(
-      (edge) =>
-        edge.targetHandle === scapedJSONStringfy(proxy ? { ...id, proxy } : id),
-    ) ?? false;
+  const { handleNodeClass, applyNodeClassFromRefresh } = useHandleNodeClass(
+    data.id,
+  );
 
   const { handleOnNewValue } = useHandleOnNewValue({
     node: data.node!,
@@ -55,7 +79,33 @@ export default function NodeInputField({
     name,
   });
 
-  useFetchDataOnMount(data.node!, handleNodeClass, name, postTemplateValue);
+  const [isAddingAction, setIsAddingAction] = useState(false);
+  const addingContextValue = useMemo(
+    () => ({
+      isAdding: isAddingAction,
+      startAdding: () => setIsAddingAction(true),
+      stopAdding: () => setIsAddingAction(false),
+    }),
+    [isAddingAction],
+  );
+
+  const nodeInformationMetadata: NodeInfoType = useMemo(() => {
+    return {
+      flowId: currentFlowId ?? "",
+      nodeType: data?.type?.toLowerCase() ?? "",
+      flowName: currentFlowName ?? "",
+      isAuth: shouldDisplayApiKey!,
+      variableName: name,
+    };
+  }, [data?.node?.id, shouldDisplayApiKey, name]);
+
+  useFetchDataOnMount(
+    data.node!,
+    data.id,
+    applyNodeClassFromRefresh,
+    name,
+    postTemplateValue,
+  );
 
   useEffect(() => {
     if (optionalHandle && optionalHandle.length === 0) {
@@ -63,100 +113,137 @@ export default function NodeInputField({
     }
   }, [optionalHandle]);
 
-  const displayHandle =
-    !LANGFLOW_SUPPORTED_TYPES.has(type ?? "") ||
-    (optionalHandle && optionalHandle.length > 0);
+  const isFlexView = FLEX_VIEW_TYPES.includes(type ?? "");
+
+  const labelId = `node-${data.id}-field-${name}-label`;
 
   const Handle = (
     <HandleRenderComponent
       left={true}
-      nodes={nodes}
       tooltipTitle={tooltipTitle}
       proxy={proxy}
       id={id}
       title={title}
-      edges={edges}
       myData={myData}
       colors={colors}
       setFilterEdge={setFilterEdge}
       showNode={showNode}
-      testIdComplement={`${data?.type?.toLowerCase()}-${showNode ? "shownode" : "noshownode"}`}
+      testIdComplement={`${classNameFromType(
+        data?.type ?? "",
+      ).toLowerCase()}-${showNode ? "shownode" : "noshownode"}`}
+      nodeId={data.id}
+      colorName={colorName}
+      minimizedHandleTop={minimizedHandleTop}
     />
   );
 
-  return !showNode ? (
-    displayHandle ? (
-      Handle
-    ) : (
-      <></>
-    )
+  // LE-1810 (T8): a minimized node renders every input handle, not only the
+  // primary one.
+  return !showNode && displayHandle ? (
+    Handle
   ) : (
     <div
       ref={ref}
-      className={
-        "relative mt-1 flex w-full flex-wrap items-center justify-between bg-muted px-5 py-2" +
-        ((name === "code" && type === "code") ||
-        (name.includes("code") && proxy)
-          ? " hidden"
-          : "")
-      }
+      className={cn(
+        "relative flex min-h-10 w-full flex-wrap items-center justify-between px-5 py-2",
+        lastInput ? "rounded-b-[0.69rem] pb-5" : "",
+        isToolMode && "bg-primary/10",
+        (name === "code" && type === "code") || (name.includes("code") && proxy)
+          ? "hidden"
+          : "",
+        // Hide the entire field if showNode is false (but still render it for hooks to execute)
+        !showNode && "hidden",
+      )}
     >
-      <>
-        <div className="flex w-full items-center truncate text-sm">
-          {proxy ? (
-            <ShadTooltip content={<span>{proxy.id}</span>}>
-              {
-                <span>
-                  {getCustomParameterTitle({ title, nodeId: data.id })}
-                </span>
-              }
-            </ShadTooltip>
-          ) : (
-            <div className="flex gap-2">
-              <span>
+      {displayHandle && showNode && Handle}
+      <div
+        className={cn(
+          "flex w-full flex-col gap-2",
+          isFlexView ? "flex-row" : "flex-col",
+        )}
+      >
+        <div className="flex w-full items-center justify-between text-sm">
+          <div className="flex w-full items-center truncate">
+            {proxy ? (
+              <ShadTooltip content={<span>{proxy.id}</span>}>
                 {
                   <span>
-                    {getCustomParameterTitle({ title, nodeId: data.id })}
+                    {getCustomParameterTitle({
+                      title,
+                      nodeId: data.id,
+                      isFlexView,
+                      required,
+                      labelId,
+                      requiredText: t("field.required"),
+                    })}
                   </span>
                 }
+              </ShadTooltip>
+            ) : (
+              <span className="text-sm font-medium">
+                {getCustomParameterTitle({
+                  title,
+                  nodeId: data.id,
+                  isFlexView,
+                  required,
+                  labelId,
+                  requiredText: t("field.required"),
+                })}
               </span>
-            </div>
-          )}
-          <span className={(required ? "ml-2 " : "") + "text-status-red"}>
-            {required ? "*" : ""}
-          </span>
-          <div className="">
+            )}
             {info !== "" && (
               <ShadTooltip content={<NodeInputInfo info={info} />}>
-                {/* put div to avoid bug that does not display tooltip */}
                 <div className="cursor-help">
                   <IconComponent
                     name="Info"
-                    className="relative bottom-px ml-1.5 h-3 w-4"
+                    strokeWidth={ICON_STROKE_WIDTH}
+                    className="ml-1 h-3 w-3 text-placeholder"
                   />
                 </div>
               </ShadTooltip>
             )}
           </div>
+          <CustomParameterLabel
+            name={name}
+            nodeId={data.id}
+            templateValue={data.node?.template[name]}
+            nodeClass={data.node!}
+          />
+          {data.node?.template[name]?.type === "actionPicker" && (
+            <ActionPickerAddButton
+              testId={name}
+              onClick={() => setIsAddingAction(true)}
+            />
+          )}
         </div>
 
-        {displayHandle && Handle}
         {data.node?.template[name] !== undefined && (
-          <div className="mt-2 w-full">
+          <ActionPickerAddingContext.Provider value={addingContextValue}>
             <CustomParameterComponent
               handleOnNewValue={handleOnNewValue}
               name={name}
               nodeId={data.id}
+              inputId={id}
               templateData={data.node?.template[name]!}
               templateValue={data.node?.template[name].value ?? ""}
               editNode={false}
+              inspectionPanel={false}
               handleNodeClass={handleNodeClass}
+              showParameter={true}
               nodeClass={data.node!}
-              disabled={disabled}
+              placeholder={
+                isToolMode
+                  ? t("input.toolsetPlaceholder")
+                  : data.node?.template[name].placeholder
+              }
+              isToolMode={isToolMode}
+              nodeInformationMetadata={nodeInformationMetadata}
+              proxy={proxy}
+              ariaLabelledBy={labelId}
             />
-          </div>
+          </ActionPickerAddingContext.Provider>
         )}
-      </>
+      </div>
     </div>
   );
 }

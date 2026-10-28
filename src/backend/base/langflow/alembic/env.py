@@ -1,12 +1,18 @@
+import asyncio
+import hashlib
 import os
 import warnings
 from logging.config import fileConfig
+from typing import Any
 
 from alembic import context
-from loguru import logger
-from sqlalchemy import engine_from_config, pool
+from lfx.log.logger import logger
+from sqlalchemy import pool, text
+from sqlalchemy.event import listen
+from sqlalchemy.ext.asyncio import async_engine_from_config
 
-from langflow.services.database.models import *  # noqa
+from langflow.alembic.expand_compat import filter_expand_revision_directives
+from langflow.alembic.warning_filters import filter_known_sqlite_reflection_warnings
 from langflow.services.database.service import SQLModel
 
 # this is the Alembic Config object, which provides
@@ -18,16 +24,48 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
+NAMING_CONVENTION = {
+    "ix": "ix_%(column_0_label)s",
+    "uq": "uq_%(table_name)s_%(column_0_name)s",
+    "ck": "ck_%(table_name)s_%(constraint_name)s",
+    "fk": "fk_%(table_name)s_%(column_0_name)s_%(referred_table_name)s",
+    "pk": "pk_%(table_name)s",
+}
 # add your model's MetaData object here
 # for 'autogenerate' support
 # from myapp import mymodel
 # target_metadata = mymodel.Base.metadata
 target_metadata = SQLModel.metadata
-
+target_metadata.naming_convention = NAMING_CONVENTION
 # other values from the config, defined by the needs of env.py,
 # can be acquired:
 # my_important_option = config.get_main_option("my_important_option")
 # ... etc.
+
+VERSION_TABLE = "alembic_version"
+
+
+def include_name(name: str | None, type_: str, parent_names: dict[str, str | None]) -> bool:
+    """Restrict autogenerate to the tables Langflow owns.
+
+    Langflow shares its database with anything the user points at the same
+    connection string: LangChain vector stores (``langchain_pg_collection``,
+    ``langchain_pg_embedding``), the SQL Executor component, or an unrelated
+    application. Without this filter autogenerate reflects those tables, finds
+    no model behind them, and emits a ``remove_table`` diff -- which makes
+    ``alembic check`` fail and aborts startup with "There's a mismatch between
+    the models and the database" (GH #9117). Langflow never drops a table it
+    does not own, so those diffs are always false positives.
+
+    Drift inside Langflow's own tables is still compared normally.
+    """
+    if type_ != "table":
+        return True
+    if name == VERSION_TABLE:
+        return True
+    schema = parent_names.get("schema_name")
+    qualified = f"{schema}.{name}" if schema else name
+    return qualified in target_metadata.tables
 
 
 def run_migrations_offline() -> None:
@@ -42,18 +80,103 @@ def run_migrations_offline() -> None:
     script output.
 
     """
-    url = os.getenv("LANGFLOW_DATABASE_URL")
-    url = url or config.get_main_option("sqlalchemy.url")
-    context.configure(
-        url=url,
-        target_metadata=target_metadata,
-        literal_binds=True,
-        dialect_opts={"paramstyle": "named"},
-        render_as_batch=True,
-    )
+    url = config.get_main_option("sqlalchemy.url")
+    configure_kwargs = {
+        "url": url,
+        "target_metadata": target_metadata,
+        "literal_binds": True,
+        "dialect_opts": {"paramstyle": "named"},
+        "render_as_batch": True,
+        "include_name": include_name,
+        "process_revision_directives": filter_expand_revision_directives,
+    }
+
+    # Only add prepare_threshold for PostgreSQL
+    if url and "postgresql" in url:
+        configure_kwargs["prepare_threshold"] = None
+
+    context.configure(**configure_kwargs)
 
     with context.begin_transaction():
         context.run_migrations()
+
+
+def _sqlite_do_connect(
+    dbapi_connection,
+    connection_record,  # noqa: ARG001
+):
+    # disable pysqlite's emitting of the BEGIN statement entirely.
+    # also stops it from emitting COMMIT before any DDL.
+    dbapi_connection.isolation_level = None
+
+
+def _sqlite_do_begin(conn):
+    # emit our own BEGIN
+    conn.exec_driver_sql("PRAGMA busy_timeout = 60000")
+    conn.exec_driver_sql("BEGIN EXCLUSIVE")
+
+
+def _do_run_migrations(connection):
+    configure_kwargs = {
+        "connection": connection,
+        "target_metadata": target_metadata,
+        "render_as_batch": True,
+        "include_name": include_name,
+        "process_revision_directives": filter_expand_revision_directives,
+    }
+
+    # Only add prepare_threshold for PostgreSQL
+    if connection.dialect.name == "postgresql":
+        configure_kwargs["prepare_threshold"] = None
+
+    context.configure(**configure_kwargs)
+    with context.begin_transaction():
+        if connection.dialect.name == "postgresql":
+            # Use namespace from environment variable if provided, otherwise use default static key
+            namespace = os.getenv("LANGFLOW_MIGRATION_LOCK_NAMESPACE")
+            if namespace:
+                lock_key = int(hashlib.sha256(namespace.encode()).hexdigest()[:16], 16) % (2**63 - 1)
+                logger.info(f"Using migration lock namespace: {namespace}, lock_key: {lock_key}")
+            else:
+                lock_key = 11223344
+                logger.info(f"Using default migration lock_key: {lock_key}")
+
+            connection.execute(text("SET LOCAL lock_timeout = '180s';"))
+            connection.execute(text(f"SELECT pg_advisory_xact_lock({lock_key});"))
+        if connection.dialect.name == "sqlite":
+            with warnings.catch_warnings():
+                filter_known_sqlite_reflection_warnings()
+                context.run_migrations()
+        else:
+            context.run_migrations()
+
+
+async def _run_async_migrations() -> None:
+    # Disable prepared statements for PostgreSQL (required for PgBouncer compatibility)
+    # SQLite doesn't support this parameter, so only add it for PostgreSQL
+    config_section = config.get_section(config.config_ini_section, {})
+    db_url = config_section.get("sqlalchemy.url", "")
+
+    connect_args: dict[str, Any] = {}
+    if db_url and "postgresql" in db_url:
+        connect_args["prepare_threshold"] = None
+
+    connectable = async_engine_from_config(
+        config_section,
+        prefix="sqlalchemy.",
+        poolclass=pool.NullPool,
+        connect_args=connect_args,
+    )
+
+    if connectable.dialect.name == "sqlite":
+        # See https://docs.sqlalchemy.org/en/20/dialects/sqlite.html#serializable-isolation-savepoints-transactional-ddl
+        listen(connectable.sync_engine, "connect", _sqlite_do_connect)
+        listen(connectable.sync_engine, "begin", _sqlite_do_begin)
+
+    async with connectable.connect() as connection:
+        await connection.run_sync(_do_run_migrations)
+
+    await connectable.dispose()
 
 
 def run_migrations_online() -> None:
@@ -63,32 +186,7 @@ def run_migrations_online() -> None:
     and associate a connection with the context.
 
     """
-
-    try:
-        from langflow.services.database.factory import DatabaseServiceFactory
-        from langflow.services.deps import get_db_service
-        from langflow.services.manager import initialize_settings_service, service_manager
-
-        initialize_settings_service()
-        service_manager.register_factory(DatabaseServiceFactory())
-        connectable = get_db_service().engine
-    except Exception as e:
-        logger.error(f"Error getting database engine: {e}")
-        url = os.getenv("LANGFLOW_DATABASE_URL")
-        url = url or config.get_main_option("sqlalchemy.url")
-        if url:
-            config.set_main_option("sqlalchemy.url", url)
-        connectable = engine_from_config(
-            config.get_section(config.config_ini_section, {}),
-            prefix="sqlalchemy.",
-            poolclass=pool.NullPool,
-        )
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        with connectable.connect() as connection:
-            context.configure(connection=connection, target_metadata=target_metadata, render_as_batch=True)
-            with context.begin_transaction():
-                context.run_migrations()
+    asyncio.run(_run_async_migrations())
 
 
 if context.is_offline_mode():

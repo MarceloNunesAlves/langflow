@@ -1,0 +1,358 @@
+import pytest
+from lfx.components.data import URLComponent
+from lfx.components.processing import SplitTextComponent
+from lfx.schema import Data, DataFrame
+
+from tests.base import ComponentTestBaseWithoutClient
+
+
+class TestSplitTextComponent(ComponentTestBaseWithoutClient):
+    @pytest.fixture
+    def component_class(self):
+        """Return the component class to test."""
+        return SplitTextComponent
+
+    @pytest.fixture
+    def default_kwargs(self):
+        """Return the default kwargs for the component."""
+        return {
+            "data_inputs": [Data(text="Hello World")],
+            "chunk_overlap": 200,
+            "chunk_size": 1000,
+            "separator": "\n",
+            "session_id": "test_session",
+            "sender": "test_sender",
+            "sender_name": "test_sender_name",
+        }
+
+    @pytest.fixture
+    def file_names_mapping(self):
+        """Return the file names mapping for different versions."""
+        return [
+            # It was in helpers in version 1.0.19
+            {"version": "1.0.19", "module": "helpers", "file_name": "SplitText"},
+            {"version": "1.1.0", "module": "processing", "file_name": "split_text"},
+            {"version": "1.1.1", "module": "processing", "file_name": "split_text"},
+        ]
+
+    def test_split_text_basic(self):
+        """Test basic text splitting functionality."""
+        component = SplitTextComponent()
+        test_text = "First chunk\nSecond chunk\nThird chunk"
+        component.set_attributes(
+            {
+                "data_inputs": [Data(text=test_text)],
+                "chunk_overlap": 0,
+                "chunk_size": 15,
+                "separator": "\n",
+                "text_key": "text",
+                "session_id": "test_session",
+                "sender": "test_sender",
+                "sender_name": "test_sender_name",
+            }
+        )
+
+        data_frame = component.split_text()
+        assert isinstance(data_frame, DataFrame), "Expected DataFrame instance"
+        assert len(data_frame) == 3, f"Expected DataFrame with 3 rows, got {len(data_frame)}"
+        assert list(data_frame.columns) == ["text"], f"Expected columns ['text'], got {list(data_frame.columns)}"
+        assert "First chunk" in data_frame.iloc[0]["text"], (
+            f"Expected 'First chunk', got '{data_frame.iloc[0]['text']}'"
+        )
+        assert "Second chunk" in data_frame.iloc[1]["text"], (
+            f"Expected 'Second chunk', got '{data_frame.iloc[1]['text']}'"
+        )
+        assert "Third chunk" in data_frame.iloc[2]["text"], (
+            f"Expected 'Third chunk', got '{data_frame.iloc[2]['text']}'"
+        )
+
+    @pytest.mark.parametrize(
+        ("keep_separator", "expected"),
+        [
+            ("False", ["aaa", "bbb", "ccc", "ddd"]),
+            ("True", ["aaa", ".bbb", ".ccc", ".ddd"]),
+            ("Start", ["aaa", ".bbb", ".ccc", ".ddd"]),
+            ("End", ["aaa.", "bbb.", "ccc.", "ddd"]),
+            ("end", ["aaa.", "bbb.", "ccc.", "ddd"]),
+            (True, ["aaa", ".bbb", ".ccc", ".ddd"]),
+            (False, ["aaa", "bbb", "ccc", "ddd"]),
+            ("", ["aaa", "bbb", "ccc", "ddd"]),
+            (None, ["aaa", "bbb", "ccc", "ddd"]),
+        ],
+    )
+    def test_keep_separator(self, keep_separator, expected):
+        component = self._keep_separator_component(keep_separator)
+
+        result = component.split_text()
+
+        assert result["text"].tolist() == expected
+
+    @staticmethod
+    def _keep_separator_component(keep_separator):
+        component = SplitTextComponent()
+        component.set_attributes(
+            {
+                "data_inputs": [Data(text="aaa.bbb.ccc.ddd")],
+                "chunk_overlap": 0,
+                "chunk_size": 4,
+                "separator": ".",
+                "keep_separator": keep_separator,
+                "text_key": "text",
+            }
+        )
+        return component
+
+    def test_split_text_with_overlap(self):
+        """Test text splitting with overlap."""
+        component = SplitTextComponent()
+        test_text = "First chunk.\nSecond chunk.\nThird chunk."
+        component.set_attributes(
+            {
+                "data_inputs": [Data(text=test_text)],
+                "chunk_overlap": 5,  # Small overlap to test functionality
+                "chunk_size": 20,
+                "separator": "\n",
+                "session_id": "test_session",
+                "sender": "test_sender",
+                "sender_name": "test_sender_name",
+            }
+        )
+
+        data_frame = component.split_text()
+        assert isinstance(data_frame, DataFrame), "Expected DataFrame instance"
+        assert len(data_frame) == 3, f"Expected DataFrame with 3 rows, got {len(data_frame)}"
+        assert list(data_frame.columns) == ["text"], f"Expected columns ['text'], got {list(data_frame.columns)}"
+        assert "First chunk" in data_frame.iloc[0]["text"], (
+            f"Expected 'First chunk', got '{data_frame.iloc[0]['text']}'"
+        )
+        assert "Second chunk" in data_frame.iloc[1]["text"], (
+            f"Expected 'Second chunk', got '{data_frame.iloc[1]['text']}'"
+        )
+        assert "Third chunk" in data_frame.iloc[2]["text"], (
+            f"Expected 'Third chunk', got '{data_frame.iloc[2]['text']}'"
+        )
+
+    def test_split_text_custom_separator(self):
+        """Test text splitting with a custom separator."""
+        component = SplitTextComponent()
+        test_text = "First chunk.|Second chunk.|Third chunk."
+        component.set_attributes(
+            {
+                "data_inputs": [Data(text=test_text)],
+                "chunk_overlap": 0,
+                "chunk_size": 10,
+                "separator": "|",
+                "session_id": "test_session",
+                "sender": "test_sender",
+                "sender_name": "test_sender_name",
+            }
+        )
+
+        data_frame = component.split_text()
+        assert isinstance(data_frame, DataFrame), "Expected DataFrame instance"
+        assert len(data_frame) == 3, f"Expected DataFrame with 3 rows, got {len(data_frame)}"
+        assert list(data_frame.columns) == ["text"], f"Expected columns ['text'], got {list(data_frame.columns)}"
+        assert "First chunk" in data_frame.iloc[0]["text"], (
+            f"Expected 'First chunk', got '{data_frame.iloc[0]['text']}'"
+        )
+        assert "Second chunk" in data_frame.iloc[1]["text"], (
+            f"Expected 'Second chunk', got '{data_frame.iloc[1]['text']}'"
+        )
+        assert "Third chunk" in data_frame.iloc[2]["text"], (
+            f"Expected 'Third chunk', got '{data_frame.iloc[2]['text']}'"
+        )
+
+    def test_split_text_with_metadata(self):
+        """Test text splitting while preserving metadata."""
+        component = SplitTextComponent()
+        test_metadata = {"source": "test.txt", "author": "test"}
+        test_text = "First chunk\nSecond chunk"
+        component.set_attributes(
+            {
+                "data_inputs": [Data(text=test_text, data=test_metadata)],
+                "chunk_overlap": 0,
+                "chunk_size": 7,
+                "separator": "\n",
+                "clean_output": False,
+                "session_id": "test_session",
+                "sender": "test_sender",
+                "sender_name": "test_sender_name",
+            }
+        )
+
+        data_frame = component.split_text()
+        assert isinstance(data_frame, DataFrame), "Expected DataFrame instance"
+        assert len(data_frame) == 2, f"Expected DataFrame with 2 rows, got {len(data_frame)}"
+        assert "First chunk" in data_frame.iloc[0]["text"], (
+            f"Expected 'First chunk', got '{data_frame.iloc[0]['text']}'"
+        )
+        assert "Second chunk" in data_frame.iloc[1]["text"], (
+            f"Expected 'Second chunk', got '{data_frame.iloc[1]['text']}'"
+        )
+        # Loop over each row to check metadata
+        for _, row in data_frame.iterrows():
+            assert row["source"] == test_metadata["source"], (
+                f"Expected source '{test_metadata['source']}', got '{row['source']}'"
+            )
+            assert row["author"] == test_metadata["author"], (
+                f"Expected author '{test_metadata['author']}', got '{row['author']}'"
+            )
+
+    def test_split_text_clean_output_strips_metadata(self):
+        """Test that clean_output=True strips metadata columns from the output."""
+        component = SplitTextComponent()
+        test_metadata = {"source": "test.txt", "author": "test"}
+        test_text = "First chunk\nSecond chunk"
+        component.set_attributes(
+            {
+                "data_inputs": [Data(text=test_text, data=test_metadata)],
+                "chunk_overlap": 0,
+                "chunk_size": 7,
+                "separator": "\n",
+                "clean_output": True,
+                "session_id": "test_session",
+                "sender": "test_sender",
+                "sender_name": "test_sender_name",
+            }
+        )
+
+        data_frame = component.split_text()
+        assert isinstance(data_frame, DataFrame), "Expected DataFrame instance"
+        assert len(data_frame) == 2, f"Expected DataFrame with 2 rows, got {len(data_frame)}"
+        assert list(data_frame.columns) == ["text"], f"Expected only ['text'] column, got {list(data_frame.columns)}"
+        assert "source" not in data_frame.columns, "Metadata column 'source' should not be present"
+        assert "author" not in data_frame.columns, "Metadata column 'author' should not be present"
+
+    @pytest.mark.parametrize("label", [0, ("source", "id"), None])
+    def test_split_text_keeps_non_string_metadata_labels(self, label):
+        """Test that non-string metadata column labels survive the default column ordering."""
+        component = SplitTextComponent()
+        component.set_attributes(
+            {
+                "data_inputs": DataFrame({"text": ["alpha\nbeta"], label: ["source-1"]}),
+                "text_key": "text",
+                "chunk_overlap": 0,
+                "chunk_size": 6,
+                "separator": "\n",
+                "clean_output": False,
+            }
+        )
+
+        data_frame = component.split_text()
+
+        assert list(data_frame.columns) == ["text", label]
+        assert data_frame.to_numpy().tolist() == [["alpha", "source-1"], ["beta", "source-1"]]
+
+    def test_split_text_empty_input(self):
+        """Test handling of empty input text."""
+        component = SplitTextComponent()
+        component.set_attributes(
+            {
+                "data_inputs": [Data(text="")],
+                "chunk_overlap": 0,
+                "chunk_size": 10,
+                "separator": "\n",
+                "session_id": "test_session",
+                "sender": "test_sender",
+                "sender_name": "test_sender_name",
+            }
+        )
+
+        results = component.split_text()
+        assert len(results) == 0, f"Expected 0 chunks for empty input, got {len(results)}"
+
+    def test_split_text_single_chunk(self):
+        """Test text that fits in a single chunk."""
+        component = SplitTextComponent()
+        test_text = "Small text"
+        component.set_attributes(
+            {
+                "data_inputs": [Data(text=test_text)],
+                "chunk_overlap": 0,
+                "chunk_size": 100,
+                "separator": "\n",
+                "session_id": "test_session",
+                "sender": "test_sender",
+                "sender_name": "test_sender_name",
+            }
+        )
+
+        results = component.split_text()
+        assert len(results) == 1, f"Expected 1 chunk, got {len(results)}"
+        assert results["text"][0] == test_text, f"Expected '{test_text}', got '{results['text'][0]}'"
+
+    def test_split_text_multiple_inputs(self):
+        """Test splitting multiple input texts."""
+        component = SplitTextComponent()
+        test_texts = ["First text\nSecond line", "Another text\nAnother line"]
+        component.set_attributes(
+            {
+                "data_inputs": [Data(text=text) for text in test_texts],
+                "chunk_overlap": 0,
+                "chunk_size": 10,
+                "separator": "\n",
+                "session_id": "test_session",
+                "sender": "test_sender",
+                "sender_name": "test_sender_name",
+            }
+        )
+
+        results = component.split_text()
+        assert len(results) == 4, f"Expected 4 chunks (2 from each text), got {len(results)}"
+        assert "First text" in results["text"][0], f"Expected 'First text', got '{results['text'][0]}'"
+        assert "Second line" in results["text"][1], f"Expected 'Second line', got '{results['text'][1]}'"
+        assert "Another text" in results["text"][2], f"Expected 'Another text', got '{results['text'][2]}'"
+        assert "Another line" in results["text"][3], f"Expected 'Another line', got '{results['text'][3]}'"
+
+    def test_split_text_with_dataframe_input(self):
+        """Test splitting text with DataFrame input."""
+        component = SplitTextComponent()
+        test_texts = ["First text\nSecond line", "Another text\nAnother line"]
+        data_frame = DataFrame([Data(text=text) for text in test_texts])
+        component.set_attributes(
+            {
+                "data_inputs": data_frame,
+                "chunk_overlap": 0,
+                "chunk_size": 10,
+                "separator": "\n",
+                "session_id": "test_session",
+                "sender": "test_sender",
+                "sender_name": "test_sender_name",
+            }
+        )
+
+        results = component.split_text()
+        assert len(results) == 4, f"Expected 4 chunks (2 from each text), got {len(results)}"
+        assert "First text" in results["text"][0], f"Expected 'First text', got '{results['text'][0]}'"
+        assert "Second line" in results["text"][1], f"Expected 'Second line', got '{results['text'][1]}'"
+        assert "Another text" in results["text"][2], f"Expected 'Another text', got '{results['text'][2]}'"
+        assert "Another line" in results["text"][3], f"Expected 'Another line', got '{results['text'][3]}'"
+
+    async def test_with_url_loader(self):
+        """Test splitting text with URL loader."""
+        component = SplitTextComponent()
+        url = ["https://en.wikipedia.org/wiki/London", "https://en.wikipedia.org/wiki/Paris"]
+        data_frame = await URLComponent(urls=url, format="Text").fetch_content()
+        assert isinstance(data_frame, DataFrame), "Expected DataFrame instance"
+        assert len(data_frame) == 2, f"Expected DataFrame with 2 rows, got {len(data_frame)}"
+
+        # Use a reasonable chunk size that will work with varying URL content lengths
+        # The test validates that URL-loaded content can be split, not the exact number of chunks
+        component.set_attributes(
+            {
+                "data_inputs": data_frame,
+                "chunk_overlap": 200,
+                "chunk_size": 1000,
+                "separator": "\n",
+                "session_id": "test_session",
+                "sender": "test_sender",
+                "sender_name": "test_sender_name",
+            }
+        )
+
+        results = component.split_text()
+        assert isinstance(results, DataFrame), "Expected DataFrame instance"
+        # Verify we get at least as many chunks as inputs (could be more if content is large)
+        assert len(results) >= 2, f"Expected DataFrame with at least 2 rows, got {len(results)}"
+        # Verify the results have the expected text column
+        assert "text" in results.columns, f"Expected 'text' column in results, got {list(results.columns)}"

@@ -1,5 +1,6 @@
 import { DialogClose } from "@radix-ui/react-dialog";
 import { Trash2 } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { Button } from "../../components/ui/button";
 import {
   Dialog,
@@ -18,42 +19,48 @@ export default function DeleteConfirmationModal({
   open,
   setOpen,
   note = "",
+  onCloseAutoFocus,
 }: {
-  children: JSX.Element;
+  children?: JSX.Element;
   onConfirm: (e: React.MouseEvent<HTMLButtonElement, MouseEvent>) => void;
   description?: string;
   asChild?: boolean;
   open?: boolean;
   setOpen?: (open: boolean) => void;
   note?: string;
+  onCloseAutoFocus?: (event: Event) => void;
 }) {
+  const { t } = useTranslation();
+
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild={asChild} tabIndex={-1}>
-        {children}
-      </DialogTrigger>
-      <DialogContent>
+      {children ? (
+        <DialogTrigger asChild={asChild}>{children}</DialogTrigger>
+      ) : null}
+      <DialogContent onCloseAutoFocus={onCloseAutoFocus}>
         <DialogHeader>
           <DialogTitle>
             <div className="flex items-center">
-              <span className="pr-2">Delete</span>
               <Trash2
-                className="h-6 w-6 pl-1 text-foreground"
+                className="h-6 w-6 pr-1 text-foreground"
                 strokeWidth={1.5}
               />
+              <span className="pl-2">{t("deleteModal.title")}</span>
             </div>
           </DialogTitle>
         </DialogHeader>
-        <span>
-          Are you sure you want to delete the selected{" "}
-          {description ?? "component"}?<br></br>
-          {note && (
-            <>
-              {note}
-              <br></br>
-            </>
-          )}
-          Note: This action is irreversible.
+        <span className="pb-3 text-sm">
+          {note
+            ? t("deleteModal.bodyWithNote", {
+                description: description ?? t("deleteModal.flow"),
+                note,
+              })
+            : t("deleteModal.body", {
+                description: description ?? t("deleteModal.flow"),
+              })}
+          <br />
+          <br />
+          {t("deleteModal.cannotBeUndone")}
         </span>
         <DialogFooter>
           <DialogClose asChild>
@@ -61,8 +68,9 @@ export default function DeleteConfirmationModal({
               onClick={(e) => e.stopPropagation()}
               className="mr-1"
               variant="outline"
+              data-testid="btn_cancel_delete_confirmation_modal"
             >
-              Cancel
+              {t("deleteModal.cancel")}
             </Button>
           </DialogClose>
           <DialogClose asChild>
@@ -72,8 +80,9 @@ export default function DeleteConfirmationModal({
               onClick={(e) => {
                 onConfirm(e);
               }}
+              data-testid="btn_delete_delete_confirmation_modal"
             >
-              Delete
+              {t("deleteModal.delete")}
             </Button>
           </DialogClose>
         </DialogFooter>

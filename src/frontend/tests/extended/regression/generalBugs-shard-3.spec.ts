@@ -1,265 +1,89 @@
-import { expect, test } from "@playwright/test";
-import * as dotenv from "dotenv";
-import path from "path";
+import { expect, test } from "../../fixtures";
+import { adjustScreenView } from "../../utils/adjust-screen-view";
+import { configureLoopbackOpenAI } from "../../utils/configure-loopback-openai";
+import { TEXTS } from "../../utils/constants/texts";
+import { addComponentFromSidebar } from "../../utils/flow/add-component-from-sidebar";
+import { openBlankFlow } from "../../utils/flow/open-blank-flow";
+import { openStarterProject } from "../../utils/flow/open-starter-project";
+import { seedLoopbackProvider } from "../../utils/seed-loopback-provider";
 
-test("should copy code from playground modal", async ({ page }) => {
-  test.skip(
-    !process?.env?.OPENAI_API_KEY,
-    "OPENAI_API_KEY required to run this test",
-  );
+test(
+  "should copy code from playground modal",
+  {
+    tag: ["@release"],
+  },
+  async ({ page }) => {
+    await seedLoopbackProvider(page);
+    await openStarterProject(page, TEXTS.templateBasicPrompting);
+    await configureLoopbackOpenAI(page);
+    await adjustScreenView(page);
 
-  if (!process.env.CI) {
-    dotenv.config({ path: path.resolve(__dirname, "../../.env") });
-  }
+    await page
+      .getByRole("button", { name: TEXTS.playground, exact: true })
+      .click();
+    await page.waitForSelector('[data-testid="input-chat-playground"]', {
+      timeout: 100000,
+    });
+    await page.getByTestId("input-chat-playground").click();
+    await page
+      .getByTestId("input-chat-playground")
+      .fill(
+        "Could you provide a Python example for a 'Hello, World!' program?",
+      );
 
-  await page.goto("/");
-  await page.locator("span").filter({ hasText: "My Collection" }).isVisible();
-  await page.waitForSelector('[data-testid="mainpage_title"]', {
-    timeout: 30000,
-  });
+    await page.waitForSelector('[data-testid="button-send"]', {
+      timeout: 100000,
+    });
 
-  await page.waitForSelector('[id="new-project-btn"]', {
-    timeout: 30000,
-  });
+    await page.getByTestId("button-send").click();
 
-  let modalCount = 0;
-  try {
-    const modalTitleElement = await page?.getByTestId("modal-title");
-    if (modalTitleElement) {
-      modalCount = await modalTitleElement.count();
-    }
-  } catch (error) {
-    modalCount = 0;
-  }
+    await page.waitForSelector('[data-testid="copy-code-button"]', {
+      state: "visible",
+      timeout: 30000,
+    });
 
-  while (modalCount === 0) {
-    await page.getByText("New Project", { exact: true }).click();
-    await page.waitForTimeout(3000);
-    modalCount = await page.getByTestId("modal-title")?.count();
-  }
+    await page.getByTestId("copy-code-button").first().click();
 
-  await page.waitForSelector('[data-testid="blank-flow"]', {
-    timeout: 30000,
-  });
+    const handle = await page.evaluateHandle(() =>
+      navigator.clipboard.readText(),
+    );
+    const clipboardContent = await handle.jsonValue();
+    expect(clipboardContent.length).toBeGreaterThan(0);
+    expect(clipboardContent).toContain("Hello");
+  },
+);
 
-  await page.getByTestId("blank-flow").click();
-  await page.waitForSelector('[data-testid="extended-disclosure"]', {
-    timeout: 30000,
-  });
-  await page.getByTestId("extended-disclosure").click();
-  await page.getByPlaceholder("Search").click();
-  await page.getByPlaceholder("Search").fill("chat output");
-  await page.waitForTimeout(1000);
+test(
+  "playground button should be enabled or disabled",
+  { tag: ["@release", "@api", "@workspace"] },
+  async ({ page }) => {
+    await openBlankFlow(page);
 
-  await page
-    .getByTestId("outputsChat Output")
-    .dragTo(page.locator('//*[@id="react-flow-id"]'));
-  await page.mouse.up();
-  await page.mouse.down();
+    await expect(page.getByTestId("playground-btn-flow")).toBeDisabled();
+    await expect(page.getByText("Langflow Chat")).toBeHidden();
 
-  await page.getByTitle("fit view").click();
-  await page.getByTitle("zoom out").click();
-  await page.getByTitle("zoom out").click();
-  await page.getByTitle("zoom out").click();
+    await addComponentFromSidebar(page, {
+      search: TEXTS.searchChatOutput,
+      testId: "input_outputChat Output",
+      hoverAdd: true,
+      addButtonSlug: "chat-output",
+    });
+    await expect(
+      page.getByRole("application", { name: "Chat Output node" }),
+    ).toBeAttached();
 
-  await page.getByPlaceholder("Search").click();
-  await page.getByPlaceholder("Search").fill("chat input");
-  await page.waitForTimeout(1000);
+    await adjustScreenView(page);
 
-  await page
-    .getByTestId("inputsChat Input")
-    .dragTo(page.locator('//*[@id="react-flow-id"]'));
-  await page.mouse.up();
-  await page.mouse.down();
+    await expect(page.getByTestId("playground-btn-flow-io")).toBeEnabled();
+    await page.getByTestId("playground-btn-flow-io").click({ force: true });
 
-  await page.getByPlaceholder("Search").click();
-  await page.getByPlaceholder("Search").fill("openai");
-  await page.waitForTimeout(1000);
-
-  await page.getByTitle("fit view").click();
-  await page.getByTitle("zoom out").click();
-  await page.getByTitle("zoom out").click();
-  await page.getByTitle("zoom out").click();
-
-  await page
-    .getByTestId("modelsOpenAI")
-    .dragTo(page.locator('//*[@id="react-flow-id"]'));
-  await page.mouse.up();
-  await page.mouse.down();
-
-  await page.waitForSelector('[title="fit view"]', {
-    timeout: 100000,
-  });
-
-  await page.getByTitle("fit view").click();
-  await page.getByTitle("zoom out").click();
-  await page.getByTitle("zoom out").click();
-  await page.getByTitle("zoom out").click();
-  await page.getByTitle("zoom out").click();
-
-  let outdatedComponents = await page.getByTestId("icon-AlertTriangle").count();
-
-  while (outdatedComponents > 0) {
-    await page.getByTestId("icon-AlertTriangle").first().click();
-    await page.waitForTimeout(1000);
-    outdatedComponents = await page.getByTestId("icon-AlertTriangle").count();
-  }
-
-  await page
-    .getByTestId("popover-anchor-input-api_key")
-    .fill(process.env.OPENAI_API_KEY ?? "");
-
-  await page.getByTestId("dropdown_str_model_name").click();
-  await page.getByTestId("gpt-4o-1-option").click();
-
-  const elementsChatInput = await page
-    .locator('[data-testid="handle-chatinput-shownode-message-right"]')
-    .all();
-
-  let visibleElementHandle;
-
-  for (const element of elementsChatInput) {
-    if (await element.isVisible()) {
-      visibleElementHandle = element;
-      break;
-    }
-  }
-
-  // Click and hold on the first element
-  await visibleElementHandle.hover();
-  await page.mouse.down();
-
-  const elementsOpenAiInput = await page
-    .locator('[data-testid="handle-openaimodel-shownode-input-left"]')
-    .all();
-
-  for (const element of elementsOpenAiInput) {
-    if (await element.isVisible()) {
-      visibleElementHandle = element;
-      break;
-    }
-  }
-
-  await visibleElementHandle.hover();
-  await page.mouse.up();
-
-  const elementsOpenAiOutput = await page
-    .locator('[data-testid="handle-openaimodel-shownode-text-right"]')
-    .all();
-
-  for (const element of elementsOpenAiOutput) {
-    if (await element.isVisible()) {
-      visibleElementHandle = element;
-      break;
-    }
-  }
-
-  // Click and hold on the first element
-  await visibleElementHandle.hover();
-  await page.mouse.down();
-
-  // Move to the second element
-  const elementsChatOutput = await page
-    .getByTestId("handle-chatoutput-shownode-text-left")
-    .all();
-
-  for (const element of elementsChatOutput) {
-    if (await element.isVisible()) {
-      visibleElementHandle = element;
-      break;
-    }
-  }
-
-  await visibleElementHandle.hover();
-  await page.mouse.up();
-
-  await page.getByLabel("fit view").click();
-  await page.getByText("Playground", { exact: true }).click();
-  await page.waitForSelector('[data-testid="input-chat-playground"]', {
-    timeout: 100000,
-  });
-  await page.getByTestId("input-chat-playground").click();
-  await page
-    .getByTestId("input-chat-playground")
-    .fill("Could you provide a Python example for a 'Hello, World!' program?");
-
-  await page.waitForSelector('[data-testid="icon-LucideSend"]', {
-    timeout: 100000,
-  });
-
-  await page.getByTestId("icon-LucideSend").click();
-
-  await page.getByRole("tab", { name: "python" }).isVisible({
-    timeout: 100000,
-  });
-
-  await page.getByTestId("icon-Copy").first().click();
-
-  const handle = await page.evaluateHandle(() =>
-    navigator.clipboard.readText(),
-  );
-  const clipboardContent = await handle.jsonValue();
-  expect(clipboardContent.length).toBeGreaterThan(0);
-  expect(clipboardContent).toContain("Hello");
-});
-
-test("playground button should be enabled or disabled", async ({ page }) => {
-  await page.goto("/");
-  await page.locator("span").filter({ hasText: "My Collection" }).isVisible();
-  await page.waitForSelector('[data-testid="mainpage_title"]', {
-    timeout: 30000,
-  });
-
-  await page.waitForSelector('[id="new-project-btn"]', {
-    timeout: 30000,
-  });
-
-  let modalCount = 0;
-  try {
-    const modalTitleElement = await page?.getByTestId("modal-title");
-    if (modalTitleElement) {
-      modalCount = await modalTitleElement.count();
-    }
-  } catch (error) {
-    modalCount = 0;
-  }
-
-  while (modalCount === 0) {
-    await page.getByText("New Project", { exact: true }).click();
-    await page.waitForTimeout(3000);
-    modalCount = await page.getByTestId("modal-title")?.count();
-  }
-
-  await page.waitForSelector('[data-testid="blank-flow"]', {
-    timeout: 30000,
-  });
-
-  await page.getByTestId("blank-flow").click();
-  await page.waitForSelector('[data-testid="extended-disclosure"]', {
-    timeout: 30000,
-  });
-
-  expect(await page.getByTestId("playground-btn-flow").isDisabled());
-
-  expect(await page.getByText("Langflow Chat").isHidden());
-
-  await page.getByPlaceholder("Search").click();
-  await page.getByPlaceholder("Search").fill("chat output");
-
-  await page.waitForTimeout(1000);
-
-  await page
-    .locator('//*[@id="outputsChat Output"]')
-    .dragTo(page.locator('//*[@id="react-flow-id"]'));
-  await page.mouse.up();
-  await page.mouse.down();
-  await page.waitForSelector('[title="fit view"]', {
-    timeout: 100000,
-  });
-
-  await page.waitForTimeout(1000);
-
-  await page.getByTestId("playground-btn-flow-io").click({ force: true });
-
-  expect(await page.getByText("Langflow Chat").isVisible());
-});
+    await expect(
+      page.getByRole("dialog", { name: "Playground" }),
+    ).toBeVisible();
+    await expect(
+      page.getByText(
+        "Add a Chat Input component to your flow to send messages.",
+      ),
+    ).toBeVisible();
+  },
+);

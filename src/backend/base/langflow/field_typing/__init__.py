@@ -1,9 +1,10 @@
 from typing import Any
 
-from .constants import (
+from lfx.field_typing.constants import (
     AgentExecutor,
     BaseChatMemory,
     BaseChatModel,
+    BaseDocumentCompressor,
     BaseLanguageModel,
     BaseLLM,
     BaseLoader,
@@ -18,6 +19,7 @@ from .constants import (
     Data,
     Document,
     Embeddings,
+    LanguageModel,
     NestedDict,
     Object,
     PromptTemplate,
@@ -26,19 +28,18 @@ from .constants import (
     TextSplitter,
     Tool,
     VectorStore,
-    LanguageModel,
 )
-from .range_spec import RangeSpec
+from lfx.field_typing.range_spec import RangeSpec
 
 
 def _import_input_class():
-    from langflow.template.field.base import Input
+    from lfx.template.field.base import Input
 
     return Input
 
 
 def _import_output_class():
-    from langflow.template.field.base import Output
+    from lfx.template.field.base import Output
 
     return Output
 
@@ -47,9 +48,10 @@ def __getattr__(name: str) -> Any:
     # This is to avoid circular imports
     if name == "Input":
         return _import_input_class()
-        return RangeSpec
-    elif name == "Output":
+    if name == "Output":
         return _import_output_class()
+    if name == "RangeSpec":
+        return RangeSpec
     # The other names should work as if they were imported from constants
     # Import the constants module langflow.field_typing.constants
     from . import constants
@@ -60,8 +62,10 @@ def __getattr__(name: str) -> Any:
 __all__ = [
     "AgentExecutor",
     "BaseChatMemory",
-    "BaseLanguageModel",
+    "BaseChatModel",
+    "BaseDocumentCompressor",
     "BaseLLM",
+    "BaseLanguageModel",
     "BaseLoader",
     "BaseMemory",
     "BaseOutputParser",
@@ -74,16 +78,14 @@ __all__ = [
     "Data",
     "Document",
     "Embeddings",
-    "Input",
+    "LanguageModel",
     "NestedDict",
     "Object",
     "PromptTemplate",
     "RangeSpec",
+    "Retriever",
+    "Text",
     "TextSplitter",
     "Tool",
     "VectorStore",
-    "BaseChatModel",
-    "Retriever",
-    "Text",
-    "LanguageModel",
 ]

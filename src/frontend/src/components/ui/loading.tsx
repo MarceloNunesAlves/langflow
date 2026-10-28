@@ -1,4 +1,4 @@
-import { SVGProps } from "react";
+import type { SVGProps } from "react";
 
 export type LoadingProps = SVGProps<SVGSVGElement> & {
   size?: number;
@@ -17,7 +17,10 @@ export const Loading = ({ size = 24, ...props }: LoadingProps) => (
     strokeLinecap="round"
     strokeLinejoin="round"
     className="feather feather-circle"
+    aria-hidden={props["aria-label"] ? undefined : true}
+    focusable={props["aria-label"] ? undefined : false}
     {...props}
+    data-testid="loading-icon"
   >
     <circle cx={12} cy={12} r={10} strokeDasharray={63} strokeDashoffset={21}>
       <animateTransform

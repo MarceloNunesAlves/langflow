@@ -1,18 +1,32 @@
+from __future__ import annotations
+
 import asyncio
-import contextlib
+import hashlib
 import os
 import platform
+import traceback
+import uuid
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 import httpx
-from loguru import logger
-from pydantic import BaseModel
+from lfx.log.logger import logger
+from lfx.services.telemetry.constants import IBM_PRODUCT_PROPERTIES, get_ibm_common_event
+from lfx.services.telemetry.identity import get_hashed_user_id, get_or_create_anonymous_id, is_installation_user_id
+from lfx.services.telemetry.privacy import get_safe_payload_properties
 
 from langflow.services.base import Service
+from langflow.services.telemetry.context import get_current_telemetry_user_id
 from langflow.services.telemetry.opentelemetry import OpenTelemetry
+from langflow.services.telemetry.run_event_store import append_run_event
 from langflow.services.telemetry.schema import (
+    MAX_TELEMETRY_PAYLOAD_SIZE,
+    ComponentIndexPayload,
+    ComponentInputsPayload,
     ComponentPayload,
+    DeploymentPayload,
+    EmailPayload,
+    ExceptionPayload,
     PlaygroundPayload,
     RunPayload,
     ShutdownPayload,
@@ -21,114 +35,280 @@ from langflow.services.telemetry.schema import (
 from langflow.utils.version import get_version_info
 
 if TYPE_CHECKING:
-    from langflow.services.settings.service import SettingsService
+    from lfx.services.settings.service import SettingsService
+    from pydantic import BaseModel
+
+    from langflow.services.telemetry.schema import IntegrationActionPayload
+
+
+def database_dialect(database_url: str | None) -> str:
+    """Return only the engine name of a database URL, such as ``sqlite`` or ``postgresql``.
+
+    The rest of the URL carries a host and often credentials, so nothing but the
+    backend name may reach a telemetry payload.
+    """
+    if not database_url:
+        return "unknown"
+    from sqlalchemy.engine import make_url
+    from sqlalchemy.exc import ArgumentError
+
+    try:
+        return make_url(database_url).get_backend_name()
+    except (ArgumentError, ValueError):
+        return "unknown"
 
 
 class TelemetryService(Service):
     name = "telemetry_service"
 
-    def __init__(self, settings_service: "SettingsService"):
+    def __init__(self, settings_service: SettingsService):
         super().__init__()
         self.settings_service = settings_service
-        self.base_url = settings_service.settings.telemetry_base_url
+        self.base_url = settings_service.settings.segment_api_url
+        self.segment_write_key = settings_service.settings.segment_write_key
+        self.do_not_track = (
+            os.getenv("DO_NOT_TRACK", "false").lower() in {"1", "true"} or settings_service.settings.do_not_track
+        )
+        self.anonymous_id = (
+            get_or_create_anonymous_id(settings_service.settings.config_dir)
+            if self.segment_write_key and not self.do_not_track
+            else ""
+        )
         self.telemetry_queue: asyncio.Queue = asyncio.Queue()
-        self.client = httpx.AsyncClient(timeout=10.0)  # Set a reasonable timeout
+        self.client: httpx.AsyncClient | None = None
         self.running = False
         self._stopping = False
+        self._start_time = datetime.now(timezone.utc)
 
         self.ot = OpenTelemetry(prometheus_enabled=settings_service.settings.prometheus_enabled)
+        self.architecture: str | None = None
+        self.worker_task: asyncio.Task | None = None
+        self.log_package_version_task: asyncio.Task | None = None
+        self.log_package_email_task: asyncio.Task | None = None
+        self.client_type = self._get_client_type()
 
-        # Check for do-not-track settings
-        self.do_not_track = (
-            os.getenv("DO_NOT_TRACK", "False").lower() == "true" or settings_service.settings.do_not_track
-        )
+        # Initialize static telemetry fields
+        version_info = get_version_info()
+        self.common_telemetry_fields = {
+            "langflow_version": version_info["version"],
+            "platform": "desktop" if self._get_langflow_desktop() else "python_package",
+            "os": platform.system().lower(),
+        }
 
-    async def telemetry_worker(self):
+    async def telemetry_worker(self) -> None:
         while self.running:
-            func, payload, path = await self.telemetry_queue.get()
+            func, payload, path, user_id = await self.telemetry_queue.get()
             try:
-                await func(payload, path)
-            except Exception as e:
-                logger.error(f"Error sending telemetry data: {e}")
+                await func(payload, path, user_id)
+            except Exception:  # noqa: BLE001
+                await logger.aerror("Error sending telemetry data")
             finally:
                 self.telemetry_queue.task_done()
 
-    async def send_telemetry_data(self, payload: BaseModel, path: str | None = None):
-        if self.do_not_track:
-            logger.debug("Telemetry tracking is disabled.")
+    async def send_telemetry_data(
+        self, payload: BaseModel, path: str | None = None, user_id: str | None = None
+    ) -> None:
+        if self.do_not_track or not self.segment_write_key or self.client is None:
+            await logger.adebug("Telemetry tracking is disabled.")
             return
 
-        url = f"{self.base_url}"
-        if path:
-            url = f"{url}/{path}"
-        try:
-            payload_dict = payload.model_dump(exclude_none=True, exclude_unset=True)
-            response = await self.client.get(url, params=payload_dict)
-            if response.status_code != 200:
-                logger.error(f"Failed to send telemetry data: {response.status_code} {response.text}")
-            else:
-                logger.debug("Telemetry data sent successfully.")
-        except httpx.HTTPStatusError as e:
-            logger.error(f"HTTP error occurred: {e}")
-        except httpx.RequestError as e:
-            logger.error(f"Request error occurred: {e}")
-        except Exception as e:
-            logger.error(f"Unexpected error occurred: {e}")
+        if payload.client_type is None:
+            payload.client_type = self.client_type
 
-    async def log_package_run(self, payload: RunPayload):
+        try:
+            payload_dict = get_safe_payload_properties(payload)
+            event_anonymous_id = str(uuid.uuid4()) if isinstance(payload, EmailPayload) else self.anonymous_id
+
+            # Add common fields to all payloads except VersionPayload
+            if not isinstance(payload, VersionPayload):
+                payload_dict.update(self.common_telemetry_fields)
+            payload_dict.update(IBM_PRODUCT_PROPERTIES)
+            payload_dict["instanceId"] = event_anonymous_id
+            payload_dict["subscriptionId"] = event_anonymous_id
+            event, process_type, legacy_event = get_ibm_common_event(path)
+            payload_dict["object"] = legacy_event
+            if process_type is not None:
+                payload_dict["processType"] = process_type
+            else:
+                payload_dict.update({"action": "registered", "name": "Email", "namespace": "Langflow"})
+            body = {
+                "anonymousId": event_anonymous_id,
+                "event": event,
+                "messageId": str(uuid.uuid4()),
+                "properties": payload_dict,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+            body["userId"] = (
+                get_hashed_user_id(event_anonymous_id)
+                if isinstance(payload, EmailPayload)
+                else user_id
+                if is_installation_user_id(user_id)
+                else get_hashed_user_id(self.anonymous_id)
+            )
+            response = await self.client.post(self.base_url, auth=(self.segment_write_key, ""), json=body)
+            if not response.is_success:
+                await logger.awarning(f"Telemetry request failed with status {response.status_code}")
+            else:
+                await logger.adebug("Telemetry data sent successfully.")
+        except httpx.HTTPStatusError as err:
+            await logger.aerror(f"HTTP error occurred: {err}.")
+        except httpx.RequestError as err:
+            await logger.aerror(f"Request error occurred: {type(err).__name__}: {err}")
+        except Exception as err:  # noqa: BLE001
+            await logger.aerror(f"Unexpected error occurred: {err}.")
+
+    async def log_package_run(self, payload: RunPayload) -> None:
+        # Recorded before the do-not-track gate in _queue_event: enterprise
+        # metering must see every run even when outbound telemetry is off.
+        # The store is process-local and bounded; see run_event_store.
+        append_run_event(payload)
         await self._queue_event((self.send_telemetry_data, payload, "run"))
 
-    async def log_package_shutdown(self):
-        payload = ShutdownPayload(timeRunning=(datetime.now(timezone.utc) - self._start_time).seconds)
-        await self._queue_event(payload)
+    async def log_package_deployment(self, payload: DeploymentPayload) -> None:
+        await self._queue_event((self.send_telemetry_data, payload, "deployment"))
 
-    async def _queue_event(self, payload):
-        if self.do_not_track or self._stopping:
+    async def log_integration_action(self, payload: IntegrationActionPayload) -> None:
+        """Queue an integration event through the normal tracking-consent boundary."""
+        await self._queue_event((self.send_telemetry_data, payload, "integration_action"))
+
+    async def log_package_deployment_provider(self, payload: DeploymentPayload) -> None:
+        await self._queue_event((self.send_telemetry_data, payload, "deployment_provider"))
+
+    async def log_package_deployment_run(self, payload: DeploymentPayload) -> None:
+        await self._queue_event((self.send_telemetry_data, payload, "deployment_run"))
+
+    async def log_package_shutdown(self) -> None:
+        payload = ShutdownPayload(time_running=(datetime.now(timezone.utc) - self._start_time).seconds)
+        await self._queue_event((self.send_telemetry_data, payload, "shutdown"))
+
+    async def _queue_event(self, payload) -> None:
+        if self.do_not_track or not self.segment_write_key or self._stopping:
             return
-        await self.telemetry_queue.put(payload)
+        await self.telemetry_queue.put((*payload, get_current_telemetry_user_id()))
 
-    async def log_package_version(self):
+    def _get_langflow_desktop(self) -> bool:
+        # Coerce to bool, could be 1, 0, True, False, "1", "0", "True", "False"
+        return str(os.getenv("LANGFLOW_DESKTOP", "False")).lower() in {"1", "true"}
+
+    def _get_client_type(self) -> str:
+        return "desktop" if self._get_langflow_desktop() else "oss"
+
+    async def _send_email_telemetry(self) -> None:
+        """Send the telemetry event for the registered email address."""
+        from langflow.utils.registered_email_util import get_email_model
+
+        payload: EmailPayload | None = get_email_model()
+
+        if not payload:
+            await logger.adebug("Aborted operation to send email telemetry event. No registered email address.")
+            return
+
+        await logger.adebug(f"Sending email telemetry event: {payload.email}")
+
+        try:
+            await self.log_package_email(payload=payload)
+        except Exception as err:  # noqa: BLE001
+            await logger.aerror(f"Failed to send email telemetry event: {payload.email}: {err}")
+            return
+
+        await logger.adebug(f"Successfully sent email telemetry event: {payload.email}")
+
+    async def log_package_version(self) -> None:
         python_version = ".".join(platform.python_version().split(".")[:2])
         version_info = get_version_info()
-        architecture = platform.architecture()[0]
+        if self.architecture is None:
+            self.architecture = (await asyncio.to_thread(platform.architecture))[0]
         payload = VersionPayload(
             package=version_info["package"].lower(),
             version=version_info["version"],
             platform=platform.platform(),
             python=python_version,
-            cacheType=self.settings_service.settings.cache_type,
-            backendOnly=self.settings_service.settings.backend_only,
-            arch=architecture,
-            autoLogin=self.settings_service.auth_settings.AUTO_LOGIN,
+            cache_type=self.settings_service.settings.cache_type,
+            backend_only=self.settings_service.settings.backend_only,
+            arch=self.architecture,
+            auto_login=self.settings_service.auth_settings.AUTO_LOGIN,
+            database_dialect=database_dialect(self.settings_service.settings.database_url),
+            client_type=self.client_type,
         )
         await self._queue_event((self.send_telemetry_data, payload, None))
 
-    async def log_package_playground(self, payload: PlaygroundPayload):
+    async def log_package_email(self, payload: EmailPayload) -> None:
+        await self._queue_event((self.send_telemetry_data, payload, "email"))
+
+    async def log_package_playground(self, payload: PlaygroundPayload) -> None:
         await self._queue_event((self.send_telemetry_data, payload, "playground"))
 
-    async def log_package_component(self, payload: ComponentPayload):
+    async def log_package_component(self, payload: ComponentPayload) -> None:
         await self._queue_event((self.send_telemetry_data, payload, "component"))
 
-    async def start(self):
-        if self.running or self.do_not_track:
+    async def log_package_component_inputs(self, payload: ComponentInputsPayload) -> None:
+        """Log component input values, splitting into multiple requests if needed.
+
+        Args:
+            payload: Component inputs payload to log
+        """
+        chunks = payload.split_if_needed(max_payload_size=MAX_TELEMETRY_PAYLOAD_SIZE)
+
+        # Queue each chunk separately
+        for chunk in chunks:
+            await self._queue_event((self.send_telemetry_data, chunk, "component_inputs"))
+
+    async def log_component_index(self, payload: ComponentIndexPayload) -> None:
+        await self._queue_event((self.send_telemetry_data, payload, "component_index"))
+
+    async def log_exception(self, exc: Exception, context: str) -> None:
+        """Log unhandled exceptions to telemetry.
+
+        Args:
+            exc: The exception that occurred
+            context: Context where exception occurred ("lifespan" or "handler")
+        """
+        # Get the stack trace and hash it for grouping similar exceptions
+        stack_trace = traceback.format_exception(type(exc), exc, exc.__traceback__)
+        stack_trace_str = "".join(stack_trace)
+        #  Hash stack trace for grouping similar exceptions, truncated to save space
+        stack_trace_hash = hashlib.sha256(stack_trace_str.encode()).hexdigest()[:16]
+
+        payload = ExceptionPayload(
+            exception_type=exc.__class__.__name__,
+            exception_message=str(exc)[:500],  # Truncate long messages
+            exception_context=context,
+            stack_trace_hash=stack_trace_hash,
+        )
+        await self._queue_event((self.send_telemetry_data, payload, "exception"))
+
+    def start(self) -> None:
+        if self.running or self.do_not_track or not self.segment_write_key:
             return
         try:
             self.running = True
             self._start_time = datetime.now(timezone.utc)
+            self.client = httpx.AsyncClient(timeout=10.0)
             self.worker_task = asyncio.create_task(self.telemetry_worker())
-            asyncio.create_task(self.log_package_version())
-        except Exception as e:
-            logger.error(f"Error starting telemetry service: {e}")
+            self.log_package_version_task = asyncio.create_task(self.log_package_version())
+            if self._get_langflow_desktop():
+                self.log_package_email_task = asyncio.create_task(self._send_email_telemetry())
+        except Exception:  # noqa: BLE001
+            logger.exception("Error starting telemetry service")
 
-    async def flush(self):
+    async def flush(self) -> None:
         if self.do_not_track:
             return
         try:
             await self.telemetry_queue.join()
-        except Exception as e:
-            logger.error(f"Error flushing logs: {e}")
+        except Exception:  # noqa: BLE001
+            await logger.aexception("Error flushing logs")
 
-    async def stop(self):
+    @staticmethod
+    async def _cancel_task(task: asyncio.Task, cancel_msg: str) -> None:
+        task.cancel(cancel_msg)
+        await asyncio.wait([task])
+        if not task.cancelled():
+            exc = task.exception()
+            if exc is not None:
+                raise exc
+
+    async def stop(self) -> None:
         if self.do_not_track or self._stopping:
             return
         try:
@@ -137,12 +317,27 @@ class TelemetryService(Service):
             await self.flush()
             self.running = False
             if self.worker_task:
-                self.worker_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await self.worker_task
-            await self.client.aclose()
-        except Exception as e:
-            logger.error(f"Error stopping tracing service: {e}")
+                await self._cancel_task(self.worker_task, "Cancel telemetry worker task")
+            if self.log_package_version_task:
+                await self._cancel_task(
+                    self.log_package_version_task,
+                    "Cancel telemetry log package version task",
+                )
+            if self.log_package_email_task:
+                await self._cancel_task(
+                    self.log_package_email_task,
+                    "Cancel telemetry log package email task",
+                )
+            if self.client:
+                await self.client.aclose()
+                self.client = None
+        except Exception:  # noqa: BLE001
+            await logger.aexception("Error stopping tracing service")
 
-    async def teardown(self):
+    async def teardown(self) -> None:
         await self.stop()
+        # Unconditional, and separate from stop(): the OTLP application telemetry is gated on
+        # OTEL_* env, not on do_not_track, so it can be live even when product analytics is off
+        # (stop() early-returns in that case). Off the event loop: the final export can block on
+        # the network. A no-op when no provider was installed.
+        await asyncio.to_thread(self.ot.shutdown)

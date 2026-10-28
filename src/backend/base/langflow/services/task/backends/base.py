@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 
 class TaskBackend(ABC):
@@ -11,4 +12,8 @@ class TaskBackend(ABC):
 
     @abstractmethod
     def get_task(self, task_id: str) -> Any:
+        pass
+
+    @abstractmethod
+    def revoke_task(self, task_id: str) -> Any:
         pass

@@ -1,27 +1,63 @@
 import { create } from "zustand";
+import { isModifierOnlyCombination } from "@/utils/shortcuts";
+import { toCamelCase } from "@/utils/utils";
 import { defaultShortcuts } from "../constants/constants";
-import { shortcutsStoreType } from "../types/store";
+import type { shortcutsStoreType } from "../types/store";
+
+type SavedShortcut = {
+  name: string;
+  display_name: string;
+  shortcut: string;
+};
+
+/**
+ * Older builds allowed recording modifier-only combinations (e.g. just "mod"),
+ * which can never fire. Restore the default combination for those entries and
+ * drop the ones that no longer map to a known action.
+ */
+function sanitizeSavedShortcuts(saved: SavedShortcut[]): {
+  sanitized: SavedShortcut[];
+  changed: boolean;
+} {
+  let changed = false;
+  const sanitized: SavedShortcut[] = [];
+  saved.forEach((item) => {
+    if (!isModifierOnlyCombination(item.shortcut)) {
+      sanitized.push(item);
+      return;
+    }
+    changed = true;
+    const fallback = defaultShortcuts.find(
+      (defaultItem) => toCamelCase(defaultItem.name) === toCamelCase(item.name),
+    );
+    if (fallback) {
+      sanitized.push({ ...item, shortcut: fallback.shortcut });
+    }
+  });
+  return { sanitized, changed };
+}
 
 export const useShortcutsStore = create<shortcutsStoreType>((set, get) => ({
   shortcuts: defaultShortcuts,
   setShortcuts: (newShortcuts) => {
     set({ shortcuts: newShortcuts });
   },
-  output: "o",
+  outputInspection: "o",
   play: "p",
-  flow: "mod+b",
+  flow: "mod+shift+b",
   undo: "mod+z",
   redo: "mod+y",
-  open: "mod+k",
-  advanced: "mod+shift+a",
-  minimize: "mod+shift+q",
+  redoAlt: "mod+shift+z",
+  openPlayground: "mod+k",
+  advancedSettings: "mod+shift+a",
+  minimize: "mod+.",
   code: "space",
   copy: "mod+c",
   duplicate: "mod+d",
-  component: "mod+shift+s",
+  componentShare: "mod+shift+s",
   docs: "mod+shift+d",
-  changes: "mod+s",
-  save: "mod+alt+s",
+  changesSave: "mod+s",
+  saveComponent: "mod+alt+s",
   delete: "backspace",
   group: "mod+g",
   cut: "mod+x",
@@ -29,25 +65,33 @@ export const useShortcutsStore = create<shortcutsStoreType>((set, get) => ({
   api: "r",
   update: "mod+u",
   download: "mod+j",
-  freeze: "mod+f",
-  FreezePath: "mod+shift+f",
+  freezePath: "mod+shift+f",
+  toolMode: "mod+shift+m",
+  toggleSidebar: "mod+b",
+  aiAssistant: "a",
+  searchComponentsSidebar: "/",
   updateUniqueShortcut: (name, combination) => {
     set({
       [name]: combination,
     });
   },
   getShortcutsFromStorage: () => {
-    if (localStorage.getItem("langflow-shortcuts")) {
-      const savedShortcuts = localStorage.getItem("langflow-shortcuts");
-      const savedArr = JSON.parse(savedShortcuts!);
-      savedArr.forEach(({ name, shortcut }) => {
-        let shortcutName = name.split(" ")[0].toLowerCase();
-        set({
-          [shortcutName]: shortcut,
-        });
-      });
-      get().setShortcuts(JSON.parse(savedShortcuts!));
+    const savedShortcuts = localStorage.getItem("langflow-shortcuts");
+    if (!savedShortcuts) {
+      return;
     }
+    const savedArr: SavedShortcut[] = JSON.parse(savedShortcuts);
+    const { sanitized, changed } = sanitizeSavedShortcuts(savedArr);
+    if (changed) {
+      localStorage.setItem("langflow-shortcuts", JSON.stringify(sanitized));
+    }
+    sanitized.forEach(({ name, shortcut }) => {
+      const shortcutName = toCamelCase(name);
+      set({
+        [shortcutName]: shortcut,
+      });
+    });
+    get().setShortcuts(sanitized);
   },
 }));
 

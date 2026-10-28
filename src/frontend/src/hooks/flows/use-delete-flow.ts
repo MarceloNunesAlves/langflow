@@ -7,10 +7,9 @@ import {
 } from "@/utils/reactflowUtils";
 
 const useDeleteFlow = () => {
-  const flows = useFlowsManagerStore((state) => state.flows);
   const setFlows = useFlowsManagerStore((state) => state.setFlows);
 
-  const { mutate } = useDeleteDeleteFlows();
+  const { mutate, isPending } = useDeleteDeleteFlows();
 
   const deleteFlow = async ({
     id,
@@ -25,6 +24,9 @@ const useDeleteFlow = () => {
         { flow_ids: id },
         {
           onSuccess: () => {
+            // Fresh read: a pre-mutation snapshot would drop flows created
+            // while the DELETE was in flight, bouncing FlowPage to /all.
+            const flows = useFlowsManagerStore.getState().flows;
             const { data, flows: myFlows } = processFlows(
               (flows ?? []).filter((flow) => !id.includes(flow.id)),
             );
@@ -45,7 +47,7 @@ const useDeleteFlow = () => {
     });
   };
 
-  return deleteFlow;
+  return { deleteFlow, isDeleting: isPending };
 };
 
 export default useDeleteFlow;

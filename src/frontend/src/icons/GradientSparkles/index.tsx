@@ -1,6 +1,6 @@
 import { Code } from "lucide-react";
 import { forwardRef } from "react";
-import ForwardedIconComponent from "../../components/genericIconComponent";
+import ForwardedIconComponent from "../../components/common/genericIconComponent";
 
 export const GradientInfinity = forwardRef<
   SVGSVGElement,
@@ -17,30 +17,6 @@ export const GradientInfinity = forwardRef<
         </defs>
       </svg>
       <Code stroke="url(#grad1)" ref={ref} {...props} />
-    </>
-  );
-});
-
-export const GradientSave = forwardRef<
-  SVGSVGElement,
-  React.PropsWithChildren<{}>
->((props, ref) => {
-  return (
-    <>
-      <svg width="0" height="0" style={{ position: "absolute" }}>
-        <defs>
-          <linearGradient id="grad2" x1="0%" y1="0%" x2="100%" y2="0%">
-            <stop className="gradient-start" offset="0%" />
-            <stop className="gradient-end" offset="100%" />
-          </linearGradient>
-        </defs>
-      </svg>
-      <ForwardedIconComponent
-        name="Save"
-        stroke="url(#grad2)"
-        ref={ref}
-        {...props}
-      />
     </>
   );
 });
@@ -65,7 +41,10 @@ export const GradientGroup = (props) => {
   );
 };
 
-export const GradientUngroup = (props) => {
+export const GradientUngroup = forwardRef<
+  SVGSVGElement,
+  React.PropsWithChildren<{}>
+>((props, ref) => {
   return (
     <>
       <svg width="0" height="0" style={{ position: "absolute" }}>
@@ -76,7 +55,12 @@ export const GradientUngroup = (props) => {
           </linearGradient>
         </defs>
       </svg>
-      <ForwardedIconComponent name="Ungroup" stroke="url(#grad4)" {...props} />
+      <ForwardedIconComponent
+        name="Ungroup"
+        stroke="url(#grad4)"
+        ref={ref}
+        {...props}
+      />
     </>
   );
-};
+});

@@ -1,62 +1,76 @@
-import { test } from "@playwright/test";
+import { expect } from "@playwright/test";
+import { test } from "../../fixtures";
+import { TEXTS } from "../../utils/constants/texts";
+import { openBlankFlow } from "../../utils/flow/open-blank-flow";
 
-test("CodeAreaModalComponent", async ({ page }) => {
-  await page.goto("/");
-  await page.waitForSelector('[data-testid="mainpage_title"]', {
-    timeout: 30000,
-  });
+test(
+  "CodeAreaModalComponent",
+  { tag: ["@release", "@workspace"] },
+  async ({ page }) => {
+    await openBlankFlow(page);
 
-  await page.waitForSelector('[id="new-project-btn"]', {
-    timeout: 30000,
-  });
+    await page.getByTestId("canvas_controls_dropdown").click();
 
-  let modalCount = 0;
-  try {
-    const modalTitleElement = await page?.getByTestId("modal-title");
-    if (modalTitleElement) {
-      modalCount = await modalTitleElement.count();
-    }
-  } catch (error) {
-    modalCount = 0;
-  }
+    await page.waitForSelector('[data-testid="zoom_out"]', {
+      timeout: 3000,
+    });
+    await page.getByTestId("canvas_controls_dropdown").click({ force: true });
 
-  while (modalCount === 0) {
-    await page.getByText("New Project", { exact: true }).click();
-    await page.waitForTimeout(3000);
-    modalCount = await page.getByTestId("modal-title")?.count();
-  }
+    await page.getByTestId("sidebar-custom-component-button").click();
 
-  await page.waitForSelector('[data-testid="blank-flow"]', {
-    timeout: 30000,
-  });
+    await expect(page.getByTestId("code-button-modal").last()).toBeVisible({
+      timeout: 3000,
+    });
 
-  await page.getByTestId("blank-flow").click();
-  await page.waitForSelector('[data-testid="extended-disclosure"]', {
-    timeout: 30000,
-  });
-  await page.getByTestId("extended-disclosure").click();
-  await page.getByPlaceholder("Search").click();
-  await page.getByPlaceholder("Search").fill("python function");
+    await page.getByTestId("code-button-modal").last().click();
 
-  await page.waitForTimeout(1000);
+    const codeInputCode = `
+# from langflow.field_typing import Data
+from langflow.custom import Component
+from langflow.io import CodeInput, Output
+from langflow.schema import Data
+from time import sleep
+from langflow.schema.message import Message
 
-  await page
-    .getByTestId("prototypesPython Function")
-    .dragTo(page.locator('//*[@id="react-flow-id"]'));
-  await page.mouse.up();
-  await page.mouse.down();
-  await page.getByTitle("fit view").click();
-  await page.getByTitle("zoom out").click();
-  await page.getByTitle("zoom out").click();
-  await page.getByTitle("zoom out").click();
-  await page.getByTestId("div-generic-node").click();
+class CustomComponent(Component):
+    display_name = "Custom Component"
+    description = "Use as a template to create your own component."
+    documentation: str = "https://docs.langflow.org/components-custom-components"
+    icon = "custom_components"
+    name = "CustomComponent"
 
-  await page.getByTestId("code-button-modal").click();
+    inputs = [
+        CodeInput(
+            name="function_code",
+            display_name="Function Code",
+            info="The code for the function.",
+        ),
+    ]
 
-  const wCode =
-    'def python_function(text: str) -> st:    """This is a default python function that returns the input text"""    return text';
+    outputs = [
+        Output(display_name="Output", name="output", method="build_output"),
+    ]
 
-  const customComponentCode = `from typing import Callable
+    def build_output(self) -> Message:
+        data = Data(value=self.function_code)
+        self.status = data
+        sleep(60)
+        return data`;
+
+    await page.locator(".ace_content").click();
+    await page.keyboard.press(`ControlOrMeta+A`);
+    await page.locator("textarea").fill(codeInputCode);
+
+    await page.getByText(TEXTS.checkAndSave).last().click();
+
+    await page.getByTestId("div-generic-node").click();
+
+    await page.getByTestId("codearea_code_function_code").click();
+
+    const wCode =
+      'def python_function(text: str) -> st:    """This is a default python function that returns the input text"""    return text';
+
+    const customComponentCode = `from typing import Callable
 from langflow.field_typing import Code
 from langflow.interface.custom.custom_component import CustomComponent
 from langflow.interface.custom.utils import get_function
@@ -66,18 +80,19 @@ class PythonFunctionComponent(CustomComponent):
         """This is a default python function that returns the input text"""
         return text`;
 
-  await page
-    .locator("#CodeEditor div")
-    .filter({ hasText: "PythonFunctionComponent" })
-    .nth(1)
-    .click();
-  await page.locator("textarea").press("Control+a");
-  await page.locator("textarea").fill(wCode);
-  await page.locator('//*[@id="checkAndSaveBtn"]').click();
-  await page.waitForTimeout(1000);
-  await page.locator("textarea").press("Control+a");
-  await page.locator("textarea").fill(wCode);
-  await page.locator("textarea").fill(customComponentCode);
-  await page.locator('//*[@id="checkAndSaveBtn"]').click();
-  await page.waitForTimeout(1000);
-});
+    await page.locator(".ace_content").click();
+    await page.locator("textarea").press("ControlOrMeta+a");
+    await page.locator("textarea").fill(wCode);
+    await page.locator('//*[@id="checkAndSaveBtn"]').click();
+    await expect(
+      page.getByText("invalid syntax (<unknown>, line 1)"),
+    ).toBeVisible({ timeout: 3000 });
+    await page.locator("textarea").press("ControlOrMeta+a");
+    await page.locator("textarea").fill(customComponentCode);
+    await page.locator('//*[@id="checkAndSaveBtn"]').click();
+    await expect(page.getByTestId("codearea_code_function_code")).toHaveText(
+      customComponentCode,
+      { timeout: 3000 },
+    );
+  },
+);

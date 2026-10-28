@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, List, Optional
+from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
 from pydantic import ValidationInfo, field_validator
@@ -18,45 +18,63 @@ def utc_now():
 class VariableBase(SQLModel):
     name: str = Field(description="Name of the variable")
     value: str = Field(description="Encrypted value of the variable")
-    default_fields: Optional[List[str]] = Field(sa_column=Column(JSON))
-    type: Optional[str] = Field(None, description="Type of the variable")
+    default_fields: list[str] | None = Field(sa_column=Column(JSON))
+    type: str | None = Field(None, description="Type of the variable")
 
 
-class Variable(VariableBase, table=True):  # type: ignore
-    id: Optional[UUID] = Field(
+class Variable(VariableBase, table=True):  # type: ignore[call-arg]
+    id: UUID | None = Field(
         default_factory=uuid4,
         primary_key=True,
         description="Unique ID for the variable",
     )
     # name is unique per user
-    created_at: Optional[datetime] = Field(
+    created_at: datetime | None = Field(
         default=None,
         sa_column=Column(DateTime(timezone=True), server_default=func.now(), nullable=True),
         description="Creation time of the variable",
     )
-    updated_at: Optional[datetime] = Field(
+    updated_at: datetime | None = Field(
         default=None,
         sa_column=Column(DateTime(timezone=True), nullable=True),
         description="Last update time of the variable",
     )
-    default_fields: Optional[List[str]] = Field(sa_column=Column(JSON))
+    is_environment_managed: bool | None = Field(
+        default=None,
+        nullable=True,
+        description="True for environment imports, False for user overrides, None for legacy rows",
+    )
+    default_fields: list[str] | None = Field(sa_column=Column(JSON))
     # foreign key to user table
     user_id: UUID = Field(description="User ID associated with this variable", foreign_key="user.id")
     user: "User" = Relationship(back_populates="variables")
 
 
 class VariableCreate(VariableBase):
-    created_at: Optional[datetime] = Field(default_factory=utc_now, description="Creation time of the variable")
-
-    updated_at: Optional[datetime] = Field(default_factory=utc_now, description="Creation time of the variable")
+    created_at: datetime | None = Field(default_factory=utc_now, description="Creation time of the variable")
 
 
 class VariableRead(SQLModel):
     id: UUID
-    name: Optional[str] = Field(None, description="Name of the variable")
-    type: Optional[str] = Field(None, description="Type of the variable")
-    value: Optional[str] = Field(None, description="Encrypted value of the variable")
-    default_fields: Optional[List[str]] = Field(None, description="Default fields for the variable")
+    name: str | None = Field(None, description="Name of the variable")
+    type: str | None = Field(None, description="Type of the variable")
+    value: str | None = Field(None, description="Encrypted value of the variable")
+    has_value: bool = Field(
+        default=False,
+        description="Whether the variable has a non-empty stored value without exposing credential contents",
+    )
+    default_fields: list[str] | None = Field(None, description="Default fields for the variable")
+    is_owner: bool = Field(default=False, description="Whether the caller owns this variable")
+    can_manage_shares: bool = Field(
+        default=False,
+        description="Whether the caller may open share administration for this variable",
+    )
+    validation_error: str | None = Field(
+        None, description="Validation error message if this is a model provider credential with an invalid key"
+    )
+    is_valid: bool | None = Field(
+        None, description="Whether this model provider credential has a valid key (None if not a provider credential)"
+    )
 
     @field_validator("value")
     @classmethod
@@ -68,6 +86,7 @@ class VariableRead(SQLModel):
 
 class VariableUpdate(SQLModel):
     id: UUID  # Include the ID for updating
-    name: Optional[str] = Field(None, description="Name of the variable")
-    value: Optional[str] = Field(None, description="Encrypted value of the variable")
-    default_fields: Optional[List[str]] = Field(None, description="Default fields for the variable")
+    name: str | None = Field(None, description="Name of the variable")
+    value: str | None = Field(None, description="Encrypted value of the variable")
+    default_fields: list[str] | None = Field(None, description="Default fields for the variable")
+    type: str | None = Field(None, description="Type of the variable")

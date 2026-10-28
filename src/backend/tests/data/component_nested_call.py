@@ -1,8 +1,8 @@
 from random import randint
 
-from langflow.custom import Component
-from langflow.inputs.inputs import IntInput, MessageTextInput
-from langflow.template.field.base import Output
+from lfx.custom import Component
+from lfx.inputs.inputs import IntInput, MessageTextInput
+from lfx.template.field.base import Output
 
 
 class MultipleOutputsComponent(Component):
@@ -16,7 +16,7 @@ class MultipleOutputsComponent(Component):
     ]
 
     def certain_output(self) -> int:
-        return randint(0, self.number)
+        return randint(0, self.number)  # noqa: S311
 
     def other_output(self) -> int:
         return self.certain_output()

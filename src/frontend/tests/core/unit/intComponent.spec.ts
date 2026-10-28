@@ -1,191 +1,129 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "../../fixtures";
+import { adjustScreenView } from "../../utils/adjust-screen-view";
+import { TEXTS } from "../../utils/constants/texts";
 
-test("IntComponent", async ({ page }) => {
-  await page.goto("/");
-  await page.waitForSelector('[data-testid="mainpage_title"]', {
-    timeout: 30000,
-  });
+import { openBlankFlow } from "../../utils/flow/open-blank-flow";
+import {
+  addParameterToNode,
+  closeParametersPanel,
+  openParametersPanel,
+  toggleParameterOnNode,
+} from "../../utils/open-advanced-options";
+import { skipIfComponentUnavailable } from "../../utils/skip-if-component-unavailable";
 
-  await page.waitForSelector('[id="new-project-btn"]', {
-    timeout: 30000,
-  });
+test("IntComponent", { tag: ["@release", "@workspace"] }, async ({ page }) => {
+  await openBlankFlow(page);
+  await page.getByTestId("sidebar-search-input").click();
+  await page
+    .getByTestId("sidebar-search-input")
+    .fill(TEXTS.providerOpenAiSearch);
 
-  let modalCount = 0;
-  try {
-    const modalTitleElement = await page?.getByTestId("modal-title");
-    if (modalTitleElement) {
-      modalCount = await modalTitleElement.count();
-    }
-  } catch (error) {
-    modalCount = 0;
-  }
-
-  while (modalCount === 0) {
-    await page.getByText("New Project", { exact: true }).click();
-    await page.waitForTimeout(3000);
-    modalCount = await page.getByTestId("modal-title")?.count();
-  }
-  await page.waitForSelector('[data-testid="blank-flow"]', {
-    timeout: 30000,
-  });
-  await page.getByTestId("blank-flow").click();
-  await page.waitForSelector('[data-testid="extended-disclosure"]', {
-    timeout: 30000,
-  });
-  await page.getByTestId("extended-disclosure").click();
-  await page.getByPlaceholder("Search").click();
-  await page.getByPlaceholder("Search").fill("openai");
-
-  await page.waitForTimeout(1000);
+  await skipIfComponentUnavailable(page.getByTestId("openaiOpenAI"), "OpenAI");
 
   await page
-    .getByTestId("modelsOpenAI")
+    .getByTestId("openaiOpenAI")
     .first()
     .dragTo(page.locator('//*[@id="react-flow-id"]'));
-  await page.mouse.up();
-  await page.mouse.down();
-  await page.waitForSelector('[title="fit view"]', {
-    timeout: 100000,
-  });
+  await adjustScreenView(page, { numberOfZoomOut: 2 });
 
-  await page.getByTitle("fit view").click();
-  await page.getByTitle("zoom out").click();
-  await page.getByTitle("zoom out").click();
-  await page.getByTitle("zoom out").click();
+  await page.getByTestId("div-generic-node").click();
 
-  await page.getByTestId("more-options-modal").click();
-  await page.getByTestId("edit-button-modal").click();
-  await page.getByTestId("showmax_tokens").click();
+  // LE-1810: the parameters panel adds hidden fields to the node; values are
+  // edited on the node itself.
+  await addParameterToNode(page, "max_tokens");
+  await closeParametersPanel(page);
 
-  await page.getByText("Close").last().click();
   await page.getByTestId("int_int_max_tokens").click();
-  await page.getByTestId("int_int_max_tokens").fill("1020304050");
+  await page.getByTestId("int_int_max_tokens").fill("100000");
 
   let value = await page.getByTestId("int_int_max_tokens").inputValue();
 
-  if (value != "1020304050") {
-    expect(false).toBeTruthy();
-  }
+  expect(value).toBe("100000");
 
   await page.getByTestId("int_int_max_tokens").click();
   await page.getByTestId("int_int_max_tokens").fill("0");
 
   value = await page.getByTestId("int_int_max_tokens").inputValue();
 
-  if (value != "0") {
-    expect(false).toBeTruthy();
-  }
+  // max_tokens displays "" (empty) when value is 0 = no limit
+  expect(value).toBe("");
 
   await page.getByTestId("title-OpenAI").click();
 
-  await page.waitForSelector('[title="fit view"]', {
-    timeout: 100000,
-  });
+  await adjustScreenView(page, { numberOfZoomOut: 3 });
 
-  await page.getByTitle("fit view").click();
-  await page.getByTitle("zoom out").click();
-  await page.getByTitle("zoom out").click();
-  await page.getByTitle("zoom out").click();
+  // max_tokens is on the node — the value stays editable there
+  value = await page.getByTestId("int_int_max_tokens").inputValue();
 
-  await page.getByTestId("more-options-modal").click();
-  await page.getByTestId("edit-button-modal").click();
+  // max_tokens displays "" (empty) when value is 0 = no limit
+  expect(value).toBe("");
 
-  value = await page.getByTestId("int_int_edit_max_tokens").inputValue();
+  await page.getByTestId("int_int_max_tokens").click();
+  await page.getByTestId("int_int_max_tokens").fill("50000");
 
-  if (value != "0") {
-    expect(false).toBeTruthy();
-  }
+  // LE-1810: visibility rounds now happen through the panel Add/Remove
+  // actions — the row swaps between the two buttons.
+  await openParametersPanel(page);
 
-  await page.getByTestId("int_int_edit_max_tokens").click();
-  await page.getByTestId("int_int_edit_max_tokens").fill("60708090");
+  await toggleParameterOnNode(page, "model_kwargs");
+  await expect(page.getByTestId("inspector-remove-model_kwargs")).toBeVisible();
 
-  await page.locator('//*[@id="showmodel_kwargs"]').click();
-  expect(
-    await page.locator('//*[@id="showmodel_kwargs"]').isChecked(),
-  ).toBeTruthy();
+  await toggleParameterOnNode(page, "model_name");
+  await expect(page.getByTestId("inspector-add-model_name")).toBeVisible();
 
-  await page.locator('//*[@id="showmodel_name"]').click();
-  expect(
-    await page.locator('//*[@id="showmodel_name"]').isChecked(),
-  ).toBeFalsy();
+  await toggleParameterOnNode(page, "openai_api_base");
+  await expect(
+    page.getByTestId("inspector-remove-openai_api_base"),
+  ).toBeVisible();
 
-  await page.locator('//*[@id="showopenai_api_base"]').click();
-  expect(
-    await page.locator('//*[@id="showopenai_api_base"]').isChecked(),
-  ).toBeTruthy();
+  await toggleParameterOnNode(page, "temperature");
+  await expect(page.getByTestId("inspector-add-temperature")).toBeVisible();
 
-  await page.locator('//*[@id="showtemperature"]').click();
-  expect(
-    await page.locator('//*[@id="showtemperature"]').isChecked(),
-  ).toBeFalsy();
+  await toggleParameterOnNode(page, "model_kwargs");
+  await expect(page.getByTestId("inspector-add-model_kwargs")).toBeVisible();
 
-  await page.locator('//*[@id="showmodel_kwargs"]').click();
-  expect(
-    await page.locator('//*[@id="showmodel_kwargs"]').isChecked(),
-  ).toBeFalsy();
+  await toggleParameterOnNode(page, "model_name");
+  await expect(page.getByTestId("inspector-remove-model_name")).toBeVisible();
 
-  await page.locator('//*[@id="showmodel_name"]').click();
-  expect(
-    await page.locator('//*[@id="showmodel_name"]').isChecked(),
-  ).toBeTruthy();
+  await toggleParameterOnNode(page, "openai_api_base");
+  await expect(page.getByTestId("inspector-add-openai_api_base")).toBeVisible();
 
-  await page.locator('//*[@id="showopenai_api_base"]').click();
-  expect(
-    await page.locator('//*[@id="showopenai_api_base"]').isChecked(),
-  ).toBeFalsy();
+  await toggleParameterOnNode(page, "temperature");
+  await expect(page.getByTestId("inspector-remove-temperature")).toBeVisible();
 
-  await page.locator('//*[@id="showtemperature"]').click();
-  expect(
-    await page.locator('//*[@id="showtemperature"]').isChecked(),
-  ).toBeTruthy();
+  await toggleParameterOnNode(page, "model_kwargs");
+  await expect(page.getByTestId("inspector-remove-model_kwargs")).toBeVisible();
 
-  await page.locator('//*[@id="showmodel_kwargs"]').click();
-  expect(
-    await page.locator('//*[@id="showmodel_kwargs"]').isChecked(),
-  ).toBeTruthy();
+  await toggleParameterOnNode(page, "model_name");
+  await expect(page.getByTestId("inspector-add-model_name")).toBeVisible();
 
-  await page.locator('//*[@id="showmodel_name"]').click();
-  expect(
-    await page.locator('//*[@id="showmodel_name"]').isChecked(),
-  ).toBeFalsy();
+  await toggleParameterOnNode(page, "openai_api_base");
+  await expect(
+    page.getByTestId("inspector-remove-openai_api_base"),
+  ).toBeVisible();
 
-  await page.locator('//*[@id="showopenai_api_base"]').click();
-  expect(
-    await page.locator('//*[@id="showopenai_api_base"]').isChecked(),
-  ).toBeTruthy();
+  await toggleParameterOnNode(page, "temperature");
+  await expect(page.getByTestId("inspector-add-temperature")).toBeVisible();
 
-  await page.locator('//*[@id="showtemperature"]').click();
-  expect(
-    await page.locator('//*[@id="showtemperature"]').isChecked(),
-  ).toBeFalsy();
-
-  await page.getByText("Close").last().click();
+  await closeParametersPanel(page);
 
   const plusButtonLocator = page.getByTestId("int-input-max_tokens");
   const elementCount = await plusButtonLocator?.count();
   if (elementCount === 0) {
     expect(true).toBeTruthy();
 
-    await page.getByTestId("more-options-modal").click();
-    await page.getByTestId("edit-button-modal").click();
-
-    const valueEditNode = await page
+    const valueOnNode = await page
       .getByTestId("int_int_max_tokens")
       .inputValue();
 
-    if (valueEditNode != "128000") {
-      expect(false).toBeTruthy();
-    }
+    expect(valueOnNode).toBe("50000");
 
-    await page.getByText("Close").last().click();
     await page.getByTestId("int_int_max_tokens").click();
     await page.getByTestId("int_int_max_tokens").fill("3");
 
     let value = await page.getByTestId("int_int_max_tokens").inputValue();
 
-    if (value != "3") {
-      expect(false).toBeTruthy();
-    }
+    expect(value).toBe("3");
 
     await page.getByTestId("int_int_max_tokens").click();
     await page.getByTestId("int_int_max_tokens").fill("-3");
@@ -193,8 +131,7 @@ test("IntComponent", async ({ page }) => {
 
     value = await page.getByTestId("int_int_max_tokens").inputValue();
 
-    if (value != "0") {
-      expect(false).toBeTruthy();
-    }
+    // -3 clamps to 0; max_tokens displays "" when value is 0 = no limit
+    expect(value).toBe("");
   }
 });

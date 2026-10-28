@@ -6,7 +6,7 @@ Create Date: 2024-06-23 21:29:28.220100
 
 """
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 import sqlalchemy as sa
 import sqlmodel
@@ -16,9 +16,9 @@ from langflow.utils import migration
 
 # revision identifiers, used by Alembic.
 revision: str = "325180f0c4e1"
-down_revision: Union[str, None] = "631faacf5da2"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "631faacf5da2"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
@@ -32,8 +32,8 @@ def upgrade() -> None:
             sa.Column("sender_name", sqlmodel.sql.sqltypes.AutoString(), nullable=False),
             sa.Column("session_id", sqlmodel.sql.sqltypes.AutoString(), nullable=False),
             sa.Column("text", sqlmodel.sql.sqltypes.AutoString(), nullable=False),
-            sa.Column("id", sqlmodel.sql.sqltypes.GUID(), nullable=False),
-            sa.Column("flow_id", sqlmodel.sql.sqltypes.GUID(), nullable=True),
+            sa.Column("id", sqlmodel.sql.sqltypes.types.Uuid(), nullable=False),
+            sa.Column("flow_id", sqlmodel.sql.sqltypes.types.Uuid(), nullable=True),
             sa.Column("files", sa.JSON(), nullable=True),
             sa.ForeignKeyConstraint(
                 ["flow_id"],

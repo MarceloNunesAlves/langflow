@@ -1,4 +1,4 @@
-import LoadingComponent from "@/components/loadingComponent";
+import LoadingComponent from "@/components/common/loadingComponent";
 import { cn } from "@/utils/utils";
 
 export function LoadingPage({ overlay = false }: { overlay?: boolean }) {
@@ -9,7 +9,7 @@ export function LoadingPage({ overlay = false }: { overlay?: boolean }) {
         overlay && "fixed left-0 top-0 z-[999]",
       )}
     >
-      <LoadingComponent remSize={50} />
+      <LoadingComponent remSize={20} />
     </div>
   );
 }

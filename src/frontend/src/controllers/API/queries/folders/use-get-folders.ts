@@ -1,50 +1,38 @@
-import { DEFAULT_FOLDER, STARTER_FOLDER_NAME } from "@/constants/constants";
-import { FolderType } from "@/pages/MainPage/entities";
+import type { ProjectListType } from "@/pages/MainPage/entities";
+import useAuthStore from "@/stores/authStore";
 import { useFolderStore } from "@/stores/foldersStore";
-import { useTypesStore } from "@/stores/typesStore";
-import { useQueryFunctionType } from "@/types/api";
+import { useUtilityStore } from "@/stores/utilityStore";
+import type { useQueryFunctionType } from "@/types/api";
+import { getDefaultProjectId } from "@/utils/project-display-name";
 import { api } from "../../api";
 import { getURL } from "../../helpers/constants";
 import { UseRequestProcessor } from "../../services/request-processor";
-import { useGetRefreshFlows } from "../flows/use-get-refresh-flows";
 
 export const useGetFoldersQuery: useQueryFunctionType<
   undefined,
-  FolderType[]
+  ProjectListType[]
 > = (options) => {
   const { query } = UseRequestProcessor();
-  const { mutateAsync: refreshFlows } = useGetRefreshFlows();
 
-  const setStarterProjectId = useFolderStore(
-    (state) => state.setStarterProjectId,
-  );
   const setMyCollectionId = useFolderStore((state) => state.setMyCollectionId);
+  const setFolders = useFolderStore((state) => state.setFolders);
+  const defaultFolderName = useUtilityStore((state) => state.defaultFolderName);
+  const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
 
-  const getFoldersFn = async (): Promise<FolderType[]> => {
-    const res = await api.get(`${getURL("FOLDERS")}/`);
+  const getFoldersFn = async (): Promise<ProjectListType[]> => {
+    const res = await api.get<ProjectListType[]>(`${getURL("PROJECTS")}/`);
     const data = res.data;
 
-    const foldersWithoutStarterProjects = data?.filter(
-      (folder) => folder.name !== STARTER_FOLDER_NAME,
-    );
-
-    const starterProjects = data?.find(
-      (folder) => folder.name === STARTER_FOLDER_NAME,
-    );
-
-    setStarterProjectId(starterProjects?.id ?? "");
-
-    const myCollectionId = data?.find((f) => f.name === DEFAULT_FOLDER)?.id;
+    const myCollectionId = getDefaultProjectId(data, defaultFolderName);
     setMyCollectionId(myCollectionId);
+    setFolders(data);
 
-    const { getTypes, types } = useTypesStore.getState();
-
-    await refreshFlows(undefined);
-    if (!types || Object.keys(types).length === 0) await getTypes();
-
-    return foldersWithoutStarterProjects;
+    return data;
   };
 
-  const queryResult = query(["useGetFolders"], getFoldersFn, options);
+  const queryResult = query(["useGetFolders"], getFoldersFn, {
+    ...options,
+    enabled: isAuthenticated && (options?.enabled ?? true),
+  });
   return queryResult;
 };

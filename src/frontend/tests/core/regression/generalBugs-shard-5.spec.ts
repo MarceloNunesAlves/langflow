@@ -1,256 +1,317 @@
-import { expect, test } from "@playwright/test";
+import type { Page } from "@playwright/test";
+import { expect, test } from "../../fixtures";
+import { addLegacyComponents } from "../../utils/add-legacy-components";
+import { adjustScreenView } from "../../utils/adjust-screen-view";
+import { TEXTS } from "../../utils/constants/texts";
+import { addComponentFromSidebar } from "../../utils/flow/add-component-from-sidebar";
+import { openBlankFlow } from "../../utils/flow/open-blank-flow";
+import { zoomOut } from "../../utils/zoom-out";
 
-test("should be able to see output preview from grouped components", async ({
-  page,
-}) => {
-  await page.goto("/");
+async function addComponentAtPosition(
+  page: Page,
+  options: {
+    search: string;
+    testId: string;
+    position: { x: number; y: number };
+  },
+): Promise<void> {
+  const nodes = page.locator(".react-flow__node");
+  const previousNodeCount = await nodes.count();
+  await addComponentFromSidebar(page, {
+    search: options.search,
+    testId: options.testId,
+    hoverAdd: true,
+  });
 
-  let modalCount = 0;
-  const randomName = Math.random().toString(36).substring(2);
-  const secondRandomName = Math.random().toString(36).substring(2);
-  const thirdRandomName = Math.random().toString(36).substring(2);
+  const node = nodes.nth(previousNodeCount);
+  const dragHandle = node.getByTestId("generic-node-title-arrangement");
+  const before = await node.boundingBox();
+  const handleBox = await dragHandle.boundingBox();
+  const canvasBox = await page.locator("#react-flow-id").boundingBox();
+  if (!before || !handleBox || !canvasBox) {
+    throw new Error("Expected an attached graph node with a draggable title");
+  }
 
-  try {
-    const modalTitleElement = await page?.getByTestId("modal-title");
-    if (modalTitleElement) {
-      modalCount = await modalTitleElement.count();
+  const startX = handleBox.x + handleBox.width / 2;
+  const startY = handleBox.y + handleBox.height / 2;
+  await page.mouse.move(startX, startY);
+  await page.mouse.down();
+  await page.mouse.move(
+    canvasBox.x + options.position.x,
+    canvasBox.y + options.position.y,
+    { steps: 12 },
+  );
+  await page.mouse.up();
+
+  await expect
+    .poll(async () => {
+      const after = await node.boundingBox();
+      return after ? Math.hypot(after.x - before.x, after.y - before.y) : 0;
+    })
+    .toBeGreaterThan(20);
+}
+
+test(
+  "should be able to see output preview from grouped components and connect components with a single click",
+  { tag: ["@release", "@workspace", "@components"] },
+  async ({ page }) => {
+    const randomName = Math.random().toString(36).substring(2);
+    const secondRandomName = Math.random().toString(36).substring(2);
+    const thirdRandomName = Math.random().toString(36).substring(2);
+
+    await openBlankFlow(page);
+    await addLegacyComponents(page);
+
+    await addComponentAtPosition(page, {
+      search: TEXTS.searchTextInput,
+      testId: "input_outputText Input",
+      position: { x: 200, y: 200 },
+    });
+
+    await zoomOut(page, 4);
+
+    await addComponentAtPosition(page, {
+      search: TEXTS.searchTextInput,
+      testId: "input_outputText Input",
+      position: { x: 500, y: 150 },
+    });
+
+    await addComponentAtPosition(page, {
+      search: TEXTS.searchTextInput,
+      testId: "input_outputText Input",
+      position: { x: 670, y: 200 },
+    });
+
+    await addComponentAtPosition(page, {
+      search: "combine text",
+      testId: "processingCombine Text",
+      position: { x: 10, y: 10 },
+    });
+
+    await page.getByTestId("popover-anchor-input-delimiter").fill("-");
+
+    await addComponentAtPosition(page, {
+      search: "combine text",
+      testId: "processingCombine Text",
+      position: { x: 200, y: 10 },
+    });
+
+    await page.getByTestId("popover-anchor-input-delimiter").last().fill("-");
+
+    await addComponentAtPosition(page, {
+      search: "text",
+      testId: "input_outputText Output",
+      position: { x: 10, y: 400 },
+    });
+    //connection 1
+    const elementCombineTextOutput0 = page
+      .getByTestId("handle-combinetext-shownode-combined text-right")
+      .nth(0);
+    await elementCombineTextOutput0.click();
+
+    const blockedHandle = page
+      .getByTestId("handle-textinput-shownode-output text-right")
+      .first();
+    const secondBlockedHandle = page
+      .getByTestId("handle-combinetext-shownode-combined text-right")
+      .nth(1);
+    const thirdBlockedHandle = page
+      .getByTestId("handle-textoutput-shownode-output text-right")
+      .first();
+
+    const hasGradient = await blockedHandle?.evaluate((el) => {
+      const style = window.getComputedStyle(el);
+      return style.backgroundColor === "rgb(228, 228, 231)";
+    });
+
+    const secondHasGradient = await secondBlockedHandle?.evaluate((el) => {
+      const style = window.getComputedStyle(el);
+      return style.backgroundColor === "rgb(228, 228, 231)";
+    });
+
+    const thirdHasGradient = await thirdBlockedHandle?.evaluate((el) => {
+      const style = window.getComputedStyle(el);
+      return style.backgroundColor === "rgb(228, 228, 231)";
+    });
+
+    expect(hasGradient).toBe(false);
+    expect(secondHasGradient).toBe(false);
+    expect(thirdHasGradient).toBe(false);
+
+    const unlockedHandle = page
+      .getByTestId("handle-textinput-shownode-text-left")
+      .last();
+    const secondUnlockedHandle = page
+      .getByTestId("handle-combinetext-shownode-second text-left")
+      .last();
+    const thirdUnlockedHandle = page
+      .getByTestId("handle-combinetext-shownode-second text-left")
+      .first();
+    const fourthUnlockedHandle = page
+      .getByTestId("handle-textoutput-shownode-inputs-left")
+      .first();
+
+    const hasGradientUnlocked = await unlockedHandle?.evaluate((el) => {
+      const style = window.getComputedStyle(el);
+      return style.backgroundColor === "rgb(79, 70, 229)";
+    });
+
+    const secondHasGradientUnlocked = await secondUnlockedHandle?.evaluate(
+      (el) => {
+        const style = window.getComputedStyle(el);
+        return style.backgroundColor === "rgb(79, 70, 229)";
+      },
+    );
+
+    const thirdHasGradientLocked = await thirdUnlockedHandle?.evaluate((el) => {
+      const style = window.getComputedStyle(el);
+      return style.backgroundColor === "rgb(228, 228, 231)";
+    });
+
+    const fourthHasGradientUnlocked = await fourthUnlockedHandle?.evaluate(
+      (el) => {
+        const style = window.getComputedStyle(el);
+        return style.backgroundColor === "rgb(79, 70, 229)";
+      },
+    );
+
+    expect(hasGradientUnlocked).toBe(false);
+    expect(secondHasGradientUnlocked).toBe(false);
+    expect(thirdHasGradientLocked).toBe(false);
+    expect(fourthHasGradientUnlocked).toBe(false);
+
+    const elementCombineTextInput1 = await page
+      .getByTestId("handle-combinetext-shownode-first text-left")
+      .nth(1);
+    await elementCombineTextInput1.click();
+
+    await adjustScreenView(page, { numberOfZoomOut: 2 });
+
+    // Select both Combine Text nodes using box selection (Shift+drag)
+    // Note: Ctrl/Meta+click doesn't work reliably in Playwright with ReactFlow
+    const combineTextNodes = page.locator(".react-flow__node").filter({
+      has: page.getByTestId("title-Combine Text"),
+    });
+
+    const firstBox = await combineTextNodes.first().boundingBox();
+    const secondBox = await combineTextNodes.nth(1).boundingBox();
+
+    if (firstBox && secondBox) {
+      // Calculate area to drag-select both nodes
+      const startX = Math.min(firstBox.x, secondBox.x) - 50;
+      const startY = Math.min(firstBox.y, secondBox.y) - 50;
+      const endX =
+        Math.max(firstBox.x + firstBox.width, secondBox.x + secondBox.width) +
+        50;
+      const endY =
+        Math.max(firstBox.y + firstBox.height, secondBox.y + secondBox.height) +
+        50;
+
+      // Use Shift+drag for box selection
+      await page.keyboard.down("Shift");
+      await page.mouse.move(startX, startY);
+      await page.mouse.down();
+      await page.mouse.move(endX, endY, { steps: 10 });
+      await page.mouse.up();
+      await page.keyboard.up("Shift");
     }
-  } catch (error) {
-    modalCount = 0;
-  }
 
-  while (modalCount === 0) {
-    await page.getByText("New Project", { exact: true }).click();
-    await page.waitForTimeout(3000);
-    modalCount = await page.getByTestId("modal-title")?.count();
-  }
-
-  await page.waitForSelector('[data-testid="blank-flow"]', {
-    timeout: 30000,
-  });
-
-  await page.getByTestId("blank-flow").click();
-  await page.waitForSelector('[data-testid="extended-disclosure"]', {
-    timeout: 30000,
-  });
-
-  await page.getByTestId("extended-disclosure").click();
-  await page.getByPlaceholder("Search").click();
-  await page.getByPlaceholder("Search").fill("text input");
-  await page.waitForTimeout(1000);
-
-  await page
-    .getByTestId("inputsText Input")
-    .dragTo(page.locator('//*[@id="react-flow-id"]'));
-
-  await page.getByTitle("zoom out").click();
-  await page.getByTitle("zoom out").click();
-  await page.getByTitle("zoom out").click();
-  await page
-    .locator('//*[@id="react-flow-id"]')
-    .hover()
-    .then(async () => {
-      await page.mouse.down();
-      await page.mouse.move(-1000, 500);
-      await page.waitForTimeout(400);
+    await page.waitForSelector('[data-testid="group-node"]', {
+      timeout: 5000,
+      state: "visible",
     });
 
-  await page.mouse.up();
+    await page.getByTestId("group-node").click();
 
-  await page
-    .getByTestId("inputsText Input")
-    .dragTo(page.locator('//*[@id="react-flow-id"]'));
+    //connection 1
+    const elementTextOutput0 = page
+      .getByTestId("handle-textinput-shownode-output text-right")
+      .nth(0);
+    await elementTextOutput0.click();
+    const elementGroupInput0 = page.getByTestId(
+      "handle-groupnode-shownode-first text-left",
+    );
+    await elementGroupInput0.click();
 
-  await page.getByTestId("extended-disclosure").click();
-  await page.getByPlaceholder("Search").click();
-  await page.getByPlaceholder("Search").fill("combine text");
-  await page.waitForTimeout(1000);
+    //connection 2
+    const elementTextOutput1 = page
+      .getByTestId("handle-textinput-shownode-output text-right")
+      .nth(2);
+    await elementTextOutput1.click();
+    const elementGroupInput1 = page
+      .getByTestId("handle-groupnode-shownode-second text-left")
+      .first();
+    await elementGroupInput1.click();
 
-  await page
-    .locator('//*[@id="react-flow-id"]')
-    .hover()
-    .then(async () => {
-      await page.mouse.down();
-      await page.mouse.move(-1000, 800);
-      await page.waitForTimeout(400);
+    //connection 3
+    const elementTextOutput2 = page
+      .getByTestId("handle-textinput-shownode-output text-right")
+      .nth(1);
+    await elementTextOutput2.click();
+
+    const elementGroupInput2 = page
+      .getByTestId("handle-groupnode-shownode-second text-left")
+      .nth(1)
+      .last();
+    await elementGroupInput2.click();
+
+    //connection 4
+    const elementGroupOutput = page
+      .getByTestId("handle-groupnode-shownode-combined text-right")
+      .nth(0);
+    await elementGroupOutput.click();
+    const elementTextOutputInput = page
+      .getByTestId("handle-textoutput-shownode-inputs-left")
+      .nth(0);
+
+    await elementTextOutputInput.click();
+
+    await page.getByTestId("textarea_str_input_value").nth(0).fill(randomName);
+
+    await page
+      .getByTestId("textarea_str_input_value")
+      .nth(1)
+      .fill(secondRandomName);
+
+    await page
+      .getByPlaceholder("Type something...", { exact: true })
+      .nth(2)
+      .fill(thirdRandomName);
+
+    await page.getByTestId("button_run_text output").last().click();
+
+    await page.waitForSelector(`text=${TEXTS.toastBuiltSuccessfully}`, {
+      timeout: 30000,
     });
 
-  await page.mouse.up();
+    expect(
+      await page
+        .getByTestId("output-inspection-combined text-groupnode")
+        .first(),
+    ).not.toBeDisabled();
+    await page
+      .getByTestId("output-inspection-combined text-groupnode")
+      .first()
+      .click();
 
-  await page
-    .getByTestId("helpersCombine Text")
-    .dragTo(page.locator('//*[@id="react-flow-id"]'));
+    await expect(page.getByText(TEXTS.componentOutput)).toBeVisible();
+    const text = await page
+      .getByPlaceholder(TEXTS.placeholderEmpty)
+      .textContent();
 
-  await page
-    .locator('//*[@id="react-flow-id"]')
-    .hover()
-    .then(async () => {
-      await page.mouse.down();
-      await page.mouse.move(-800, 800);
-      await page.waitForTimeout(400);
-    });
+    const permutations = [
+      `${randomName}-${secondRandomName}-${thirdRandomName}`,
+      `${randomName}-${thirdRandomName}-${secondRandomName}`,
+      `${thirdRandomName}-${randomName}-${secondRandomName}`,
+      `${thirdRandomName}-${secondRandomName}-${randomName}`,
+      `${secondRandomName}-${randomName}-${thirdRandomName}`,
+      `${secondRandomName}-${thirdRandomName}-${randomName}`,
+    ];
 
-  await page.mouse.up();
+    const isPermutationIncluded = permutations.some((permutation) =>
+      text!.includes(permutation),
+    );
 
-  await page
-    .getByTestId("helpersCombine Text")
-    .dragTo(page.locator('//*[@id="react-flow-id"]'));
-
-  await page
-    .locator('//*[@id="react-flow-id"]')
-    .hover()
-    .then(async () => {
-      await page.mouse.down();
-      await page.mouse.move(-200, 800);
-      await page.waitForTimeout(200);
-    });
-
-  await page.mouse.up();
-
-  await page.getByTestId("extended-disclosure").click();
-  await page.getByPlaceholder("Search").click();
-  await page.getByPlaceholder("Search").fill("text output");
-  await page.waitForTimeout(1000);
-
-  await page
-    .locator('//*[@id="react-flow-id"]')
-    .hover()
-    .then(async () => {
-      await page.mouse.down();
-      await page.mouse.move(-200, 500);
-    });
-
-  await page.mouse.up();
-
-  await page
-    .getByTestId("outputsText Output")
-    .dragTo(page.locator('//*[@id="react-flow-id"]'));
-
-  await page.getByTitle("fit view").click({
-    force: true,
-  });
-
-  //connection 1
-  const elementCombineTextOutput0 = await page
-    .getByTestId("handle-combinetext-shownode-combined text-right")
-    .nth(0);
-  await elementCombineTextOutput0.hover();
-  await page.mouse.down();
-  const elementCombineTextInput1 = await page
-    .getByTestId("handle-combinetext-shownode-first text-left")
-    .nth(1);
-  await elementCombineTextInput1.hover();
-  await page.mouse.up();
-
-  await page
-    .getByTestId("title-Combine Text")
-    .first()
-    .click({ modifiers: ["Control"] });
-  await page
-    .getByTestId("title-Combine Text")
-    .last()
-    .click({ modifiers: ["Control"] });
-
-  await page.getByRole("button", { name: "Group" }).click();
-
-  //connection 2
-  const elementTextOutput0 = await page
-    .getByTestId("handle-textinput-shownode-text-right")
-    .nth(0);
-  await elementTextOutput0.hover();
-  await page.mouse.down();
-  const elementGroupInput0 = await page.getByTestId(
-    "handle-groupnode-shownode-first text-left",
-  );
-
-  await elementGroupInput0.hover();
-  await page.mouse.up();
-
-  //connection 3
-  const elementTextOutput1 = await page
-    .getByTestId("handle-textinput-shownode-text-right")
-    .nth(2);
-  await elementTextOutput1.hover();
-  await page.mouse.down();
-  const elementGroupInput1 = await page
-    .getByTestId("handle-groupnode-shownode-second text-left")
-    .nth(1);
-
-  await elementGroupInput1.hover();
-  await page.mouse.up();
-
-  //connection 4
-  const elementGroupOutput = await page
-    .getByTestId("handle-groupnode-shownode-combined text-right")
-    .nth(0);
-  await elementGroupOutput.hover();
-  await page.mouse.down();
-  const elementTextOutputInput = await page
-    .getByTestId("handle-textoutput-shownode-text-left")
-    .nth(0);
-
-  await elementTextOutputInput.hover();
-  await page.mouse.up();
-
-  await page.getByTestId("textarea_str_input_value").nth(0).fill(randomName);
-
-  await page.waitForTimeout(1000);
-  await page
-    .getByTestId("textarea_str_input_value")
-    .nth(1)
-    .fill(secondRandomName);
-  await page.waitForTimeout(1000);
-
-  await page
-    .getByPlaceholder("Type something...", { exact: true })
-    .nth(6)
-    .fill(thirdRandomName);
-  await page.waitForTimeout(1000);
-
-  await page
-    .getByPlaceholder("Type something...", { exact: true })
-    .nth(3)
-    .fill("-");
-  await page.waitForTimeout(1000);
-
-  await page
-    .getByPlaceholder("Type something...", { exact: true })
-    .nth(4)
-    .fill("-");
-
-  await page.waitForTimeout(3000);
-
-  await page.getByTestId("button_run_text output").last().click();
-
-  await page.waitForSelector("text=built successfully", { timeout: 30000 });
-
-  await page.getByText("built successfully").last().click({
-    timeout: 15000,
-  });
-  await page.waitForTimeout(3000);
-
-  expect(
-    await page.getByTestId("output-inspection-combined text").first(),
-  ).not.toBeDisabled();
-  await page.getByTestId("output-inspection-combined text").first().click();
-  await page.waitForTimeout(1000);
-
-  await page.getByText("Component Output").isVisible();
-
-  const text = await page.getByPlaceholder("Empty").textContent();
-
-  const permutations = [
-    `${randomName}-${secondRandomName}-${thirdRandomName}`,
-    `${randomName}-${thirdRandomName}-${secondRandomName}`,
-    `${thirdRandomName}-${randomName}-${secondRandomName}`,
-    `${thirdRandomName}-${secondRandomName}-${randomName}`,
-    `${secondRandomName}-${randomName}-${thirdRandomName}`,
-    `${secondRandomName}-${thirdRandomName}-${randomName}`,
-  ];
-
-  const isPermutationIncluded = permutations.some((permutation) =>
-    text!.includes(permutation),
-  );
-
-  expect(isPermutationIncluded).toBe(true);
-});
+    expect(isPermutationIncluded).toBe(true);
+  },
+);

@@ -1,12 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import IconComponent from "../../components/genericIconComponent";
+import { useTranslation } from "react-i18next";
+import IconComponent from "../../components/common/genericIconComponent";
 import { Button } from "../../components/ui/button";
 import { Textarea } from "../../components/ui/textarea";
-import {
-  EDIT_TEXT_PLACEHOLDER,
-  TEXT_DIALOG_SUBTITLE,
-} from "../../constants/constants";
-import { textModalPropsType } from "../../types/components";
+import type { textModalPropsType } from "../../types/components";
 import { handleKeyDown } from "../../utils/reactflowUtils";
 import { classNames } from "../../utils/utils";
 import BaseModal from "../baseModal";
@@ -19,7 +16,9 @@ export default function ComponentTextModal({
   readonly = false,
   password,
   changeVisibility,
+  onCloseModal,
 }: textModalPropsType): JSX.Element {
+  const { t } = useTranslation();
   const [modalOpen, setModalOpen] = useState(false);
   const [inputValue, setInputValue] = useState(value);
 
@@ -27,6 +26,12 @@ export default function ComponentTextModal({
   useEffect(() => {
     if (typeof value === "string") setInputValue(value);
   }, [value, modalOpen]);
+
+  useEffect(() => {
+    if (!modalOpen) {
+      onCloseModal?.();
+    }
+  }, [modalOpen]);
 
   return (
     <BaseModal
@@ -38,17 +43,17 @@ export default function ComponentTextModal({
       <BaseModal.Trigger disable={disabled} asChild>
         {children}
       </BaseModal.Trigger>
-      <BaseModal.Header description={TEXT_DIALOG_SUBTITLE}>
+      <BaseModal.Header>
         <div className="flex w-full items-start gap-3">
           <div className="flex">
-            <span className="pr-2" data-testid="modal-title">
-              {TEXT_DIALOG_SUBTITLE}
-            </span>
             <IconComponent
               name={"FileText"}
-              className="h-6 w-6 pl-1 text-primary"
+              className="h-6 w-6 pr-1 text-primary"
               aria-hidden="true"
             />
+            <span className="pl-2" data-testid="modal-title">
+              {t("dialog.editText")}
+            </span>
           </div>
           {password !== undefined && (
             <div>
@@ -76,7 +81,7 @@ export default function ComponentTextModal({
             onChange={(event) => {
               setInputValue(event.target.value);
             }}
-            placeholder={EDIT_TEXT_PLACEHOLDER}
+            placeholder={t("input.editTextPlaceholder")}
             onKeyDown={(e) => {
               handleKeyDown(e, value, "");
             }}
@@ -98,7 +103,7 @@ export default function ComponentTextModal({
             }}
             type="submit"
           >
-            Finish Editing
+            {t("editNode.finishEditing")}
           </Button>
         </div>
       </BaseModal.Footer>

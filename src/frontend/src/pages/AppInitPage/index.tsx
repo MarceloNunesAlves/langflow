@@ -1,50 +1,113 @@
-import { useGetAutoLogin } from "@/controllers/API/queries/auth";
+import { useContext, useEffect, useMemo } from "react";
+import { Outlet } from "react-router-dom";
+import { AuthContext } from "@/contexts/authContext";
+import {
+  useGetAuthSession,
+  useGetAutoLogin,
+} from "@/controllers/API/queries/auth";
+import { canSessionProbeClearAuth } from "@/controllers/API/queries/auth/session-probe";
 import { useGetConfig } from "@/controllers/API/queries/config/use-get-config";
+import { useGetBasicExamplesQuery } from "@/controllers/API/queries/flows/use-get-basic-examples";
+import { useGetFoldersQuery } from "@/controllers/API/queries/folders/use-get-folders";
+import { useGetTagsQuery } from "@/controllers/API/queries/store";
 import { useGetGlobalVariables } from "@/controllers/API/queries/variables";
 import { useGetVersionQuery } from "@/controllers/API/queries/version";
 import { CustomLoadingPage } from "@/customization/components/custom-loading-page";
+import { ENABLE_LANGFLOW_STORE } from "@/customization/feature-flags";
 import { useCustomPrimaryLoading } from "@/customization/hooks/use-custom-primary-loading";
-import { useDarkStore } from "@/stores/darkStore";
+import useAuthStore from "@/stores/authStore";
 import useFlowsManagerStore from "@/stores/flowsManagerStore";
-import { useEffect } from "react";
-import { Outlet } from "react-router-dom";
+import type { Users } from "@/types/api";
 import { LoadingPage } from "../LoadingPage";
 
 export function AppInitPage() {
-  const dark = useDarkStore((state) => state.dark);
-  const refreshStars = useDarkStore((state) => state.refreshStars);
   const isLoading = useFlowsManagerStore((state) => state.isLoading);
+  const { setUserData, storeApiKey } = useContext(AuthContext);
+  const setIsAuthenticated = useAuthStore((state) => state.setIsAuthenticated);
+  const setIsAdmin = useAuthStore((state) => state.setIsAdmin);
+  const setStoreUserData = useAuthStore((state) => state.setUserData);
+  const autoLogin = useAuthStore((state) => state.autoLogin);
+  const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
 
   const { isFetched: isLoaded } = useCustomPrimaryLoading();
 
+  // Validate session on app init to restore auth state from HttpOnly cookies
+  const { data: sessionData, isFetched: isSessionFetched } = useGetAuthSession({
+    enabled: isLoaded,
+  });
+
   const { isFetched } = useGetAutoLogin({ enabled: isLoaded });
+
+  // Only fetch authenticated endpoints when user is authenticated
+  // (either via auto-login or manual login)
+  const isAuthReady = autoLogin === true || isAuthenticated;
+
   useGetVersionQuery({ enabled: isFetched });
-  useGetConfig({ enabled: isFetched });
-  useGetGlobalVariables({ enabled: isFetched });
+  const { isFetched: isConfigFetched } = useGetConfig({
+    enabled: isFetched && isAuthReady,
+  });
+  // App initialization owns the global/unscoped snapshot used outside a flow.
+  useGetGlobalVariables({
+    enabled: isFetched && isAuthReady,
+    mirrorToStore: true,
+  });
+  useGetTagsQuery({
+    enabled: ENABLE_LANGFLOW_STORE && isFetched && isAuthReady,
+  });
+  useGetFoldersQuery({ enabled: isFetched && isAuthReady });
+  const { isFetched: isExamplesFetched, refetch: refetchExamples } =
+    useGetBasicExamplesQuery();
+
+  // Update auth state when session data is available
+  useEffect(() => {
+    if (sessionData?.authenticated && sessionData.user) {
+      // Keep AuthContext and the auth store in sync, as the playground gate
+      // does: on a reload this probe is the only thing that restores the user,
+      // and pages reading `useAuthStore.userData` would otherwise see null.
+      const user = sessionData.user as Users;
+      setUserData(user);
+      setStoreUserData(user);
+      setIsAuthenticated(true);
+      setIsAdmin(sessionData.user.is_superuser || false);
+      if (sessionData.store_api_key) {
+        storeApiKey(sessionData.store_api_key);
+      }
+    } else if (
+      sessionData &&
+      !sessionData.authenticated &&
+      canSessionProbeClearAuth()
+    ) {
+      // Explicitly not authenticated, and auto-login hasn't signed the page in.
+      setIsAuthenticated(false);
+    }
+  }, [sessionData]);
 
   useEffect(() => {
-    if (isFetched) {
-      refreshStars();
+    if (isConfigFetched) {
+      refetchExamples();
     }
-  }, [isFetched]);
+  }, [isConfigFetched]);
 
-  useEffect(() => {
-    if (!dark) {
-      document.getElementById("body")!.classList.remove("dark");
-    } else {
-      document.getElementById("body")!.classList.add("dark");
-    }
-  }, [dark]);
+  const isSessionReady = useMemo(
+    () => isAuthenticated || autoLogin || isSessionFetched,
+    [autoLogin, isSessionFetched, isAuthenticated],
+  );
+
+  // Auto-login is "complete" if:
+  // - The query actually ran (isFetched), OR
+  // - We're already authenticated (so we skipped auto-login intentionally)
+  const isAutoLoginComplete = isFetched || isAuthenticated;
+
+  const isReady = isAutoLoginComplete && isExamplesFetched && isSessionReady;
 
   return (
-    //need parent component with width and height
     <>
       {isLoaded ? (
-        (isLoading || !isFetched) && <LoadingPage overlay />
+        (isLoading || !isReady) && <LoadingPage overlay />
       ) : (
         <CustomLoadingPage />
       )}
-      {isFetched && <Outlet />}
+      {isReady && <Outlet />}
     </>
   );
 }

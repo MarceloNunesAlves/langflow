@@ -1,11 +1,21 @@
-import { LANGFLOW_ACCESS_TOKEN } from "@/constants/constants";
+import axios, {
+  type AxiosError,
+  type AxiosInstance,
+  type AxiosRequestConfig,
+} from "axios";
+import * as fetchIntercept from "fetch-intercept";
+import { useEffect } from "react";
+import { IS_AUTO_LOGIN } from "@/constants/constants";
+import { baseURL } from "@/customization/constants";
 import { useCustomApiHeaders } from "@/customization/hooks/use-custom-api-headers";
+import { customShouldSkipAuthRefresh } from "@/customization/utils/custom-should-skip-auth-refresh";
+import {
+  getAxiosWithCredentials,
+  getFetchCredentials,
+} from "@/customization/utils/get-fetch-credentials";
 import useAuthStore from "@/stores/authStore";
-import axios, { AxiosError, AxiosInstance, AxiosRequestConfig } from "axios";
-import { useContext, useEffect } from "react";
-import { Cookies } from "react-cookie";
-import { BuildStatus } from "../../constants/enums";
-import { AuthContext } from "../../contexts/authContext";
+import { useUtilityStore } from "@/stores/utilityStore";
+import { BuildStatus, type EventDeliveryType } from "../../constants/enums";
 import useAlertStore from "../../stores/alertStore";
 import useFlowStore from "../../stores/flowStore";
 import { checkDuplicateRequestAndStoreRequest } from "./helpers/check-duplicate-requests";
@@ -13,50 +23,137 @@ import { useLogout, useRefreshAccessToken } from "./queries/auth";
 
 // Create a new Axios instance
 const api: AxiosInstance = axios.create({
-  baseURL: "",
+  baseURL: baseURL,
+  withCredentials: getAxiosWithCredentials(),
 });
 
-const cookies = new Cookies();
+// URL fragments for auth-maintenance endpoints. A 401/403 on any of these
+// must NOT trigger the refresh-then-retry branch — that path itself goes
+// through this same axios instance, so retrying would recurse. Exported
+// for unit testing.
+export const AUTH_MAINTENANCE_PATHS = [
+  "/refresh",
+  "/login",
+  "/logout",
+  "/auto_login",
+];
+
+export function isAuthMaintenanceURL(url: string | undefined): boolean {
+  if (!url) return false;
+  return AUTH_MAINTENANCE_PATHS.some((path) => {
+    const idx = url.indexOf(path);
+    if (idx === -1) return false;
+    const charAfter = url[idx + path.length];
+    return (
+      charAfter === undefined ||
+      charAfter === "/" ||
+      charAfter === "?" ||
+      charAfter === "#"
+    );
+  });
+}
+
 function ApiInterceptor() {
   const autoLogin = useAuthStore((state) => state.autoLogin);
   const setErrorData = useAlertStore((state) => state.setErrorData);
-  let { accessToken, authenticationErrorCount } = useContext(AuthContext);
+  const accessToken = useAuthStore((state) => state.accessToken);
+  const authenticationErrorCount = useAuthStore(
+    (state) => state.authenticationErrorCount,
+  );
+  const setAuthenticationErrorCount = useAuthStore(
+    (state) => state.setAuthenticationErrorCount,
+  );
+
   const { mutate: mutationLogout } = useLogout();
-  const { mutate: mutationRenewAccessToken } = useRefreshAccessToken();
+  const { mutateAsync: mutationRenewAccessToken } = useRefreshAccessToken();
   const isLoginPage = location.pathname.includes("login");
   const customHeaders = useCustomApiHeaders();
 
+  const setHealthCheckTimeout = useUtilityStore(
+    (state) => state.setHealthCheckTimeout,
+  );
+
   useEffect(() => {
+    const unregister = fetchIntercept.register({
+      request: (url, config) => {
+        // Browser automatically sends cookies with requests (including HttpOnly cookies)
+        // No need to manually add Authorization header from cookies
+
+        if (!isExternalURL(url)) {
+          for (const [key, value] of Object.entries(customHeaders)) {
+            config.headers[key] = value;
+          }
+          // The axios interceptor below sets this too, but the canvas runs flows through
+          // fetch, not axios: AG-UI's HttpAgent issues a raw fetch and never touches the
+          // axios instance. Without this the client attribute is absent on the one surface
+          // it exists to identify. See the axios copy for what the value means.
+          config.headers["x-langflow-client"] = "playground";
+        }
+
+        return [url, config];
+      },
+    });
+
     const interceptor = api.interceptors.response.use(
-      (response) => response,
+      (response) => {
+        setHealthCheckTimeout(null);
+        return response;
+      },
       async (error: AxiosError) => {
         const isAuthenticationError =
           error?.response?.status === 403 || error?.response?.status === 401;
 
-        if (isAuthenticationError) {
-          if (autoLogin !== undefined && !autoLogin) {
-            if (error?.config?.url?.includes("github")) {
-              return Promise.reject(error);
-            }
-            const stillRefresh = checkErrorCount();
-            if (!stillRefresh) {
-              return Promise.reject(error);
-            }
+        const shouldRetryRefresh =
+          (isAuthenticationError && !IS_AUTO_LOGIN) ||
+          (isAuthenticationError && !autoLogin && autoLogin !== undefined);
 
-            await tryToRenewAccessToken(error);
-
-            const accessToken = cookies.get(LANGFLOW_ACCESS_TOKEN);
-            if (!accessToken && error?.config?.url?.includes("login")) {
-              return Promise.reject(error);
-            }
+        if (shouldRetryRefresh) {
+          // Edition overlays can mark specific 403s as "authenticated but
+          // gated" (e.g. forced password change) so we don't refresh/logout.
+          if (customShouldSkipAuthRefresh(error)) {
+            return Promise.reject(error);
           }
+          if (
+            error?.config?.url?.includes("github") ||
+            error?.config?.url?.includes("public")
+          ) {
+            return Promise.reject(error);
+          }
+          // Auth-maintenance endpoints must not trigger refresh themselves.
+          // The refresh mutation uses this same axios instance, so if
+          // ``/refresh`` returns 401 (expired refresh token) it would
+          // re-enter this branch and recurse. Same for login/logout/
+          // auto_login. Reject the original failure and let the caller
+          // (typically the refresh mutation's catch block) drive logout.
+          if (isAuthMaintenanceURL(error?.config?.url)) {
+            await clearBuildVerticesState(error);
+            return Promise.reject(error);
+          }
+          const stillRefresh = checkErrorCount();
+          if (!stillRefresh) {
+            return Promise.reject(error);
+          }
+
+          try {
+            await tryToRenewAccessToken(error);
+          } catch {
+            // Refresh failed (already logged + logout dispatched in the
+            // helper). Reject with the original error so callers see a
+            // clean failure instead of a swallowed undefined response.
+            await clearBuildVerticesState(error);
+            return Promise.reject(error);
+          }
+          await clearBuildVerticesState(error);
+          return await remakeRequest(error);
         }
 
         await clearBuildVerticesState(error);
 
-        if (!isAuthenticationError) {
-          return Promise.reject(error);
-        }
+        // Non-recoverable failure path: always reject so callers and
+        // React Query see a real error rather than an undefined response.
+        // This used to silently swallow auth errors under AUTO_LOGIN,
+        // producing infinite "Loading models…" spinners on fresh installs.
+        return Promise.reject(error);
       },
     );
 
@@ -80,15 +177,33 @@ function ApiInterceptor() {
         );
 
         return isDomainAllowed || isEndpointAllowed;
-      } catch (e) {
+      } catch (_e) {
         // Invalid URL
         return false;
       }
     };
 
-    // Request interceptor to add access token to every request
+    // Check for external url which we don't want to add custom headers to
+    const isExternalURL = (url: string): boolean => {
+      const EXTERNAL_DOMAINS = [
+        "https://raw.githubusercontent.com",
+        "https://api.github.com",
+        "https://api.segment.io",
+        "https://cdn.sprig.com",
+      ];
+
+      try {
+        const parsedURL = new URL(url);
+        return EXTERNAL_DOMAINS.some((domain) => parsedURL.origin === domain);
+      } catch (_e) {
+        return false;
+      }
+    };
+
+    // Request interceptor to add custom headers
+    // Browser automatically sends cookies (including HttpOnly) with requests
     const requestInterceptor = api.interceptors.request.use(
-      (config) => {
+      async (config) => {
         const controller = new AbortController();
         try {
           checkDuplicateRequestAndStoreRequest(config);
@@ -96,11 +211,6 @@ function ApiInterceptor() {
           const error = e as Error;
           controller.abort(error.message);
           console.error(error.message);
-        }
-
-        const accessToken = cookies.get(LANGFLOW_ACCESS_TOKEN);
-        if (accessToken && !isAuthorizedURL(config?.url)) {
-          config.headers["Authorization"] = `Bearer ${accessToken}`;
         }
 
         const currentOrigin = window.location.origin;
@@ -111,6 +221,12 @@ function ApiInterceptor() {
           for (const [key, value] of Object.entries(customHeaders)) {
             config.headers[key] = value;
           }
+          // Tells the backend which client this run came from, for the operator's traces. The
+          // playground calls the same public API a user's own script would, so the route cannot
+          // distinguish them and the caller has to say. Advisory only: it is self-reported and
+          // the server ignores anything outside its known vocabulary, so never rely on it for
+          // access decisions.
+          config.headers["x-langflow-client"] = "playground";
         }
 
         return {
@@ -127,16 +243,17 @@ function ApiInterceptor() {
       // Clean up the interceptors when the component unmounts
       api.interceptors.response.eject(interceptor);
       api.interceptors.request.eject(requestInterceptor);
+      unregister();
     };
   }, [accessToken, setErrorData, customHeaders, autoLogin]);
 
-  function checkErrorCount() {
-    if (isLoginPage) return;
+  function checkErrorCount(): boolean {
+    if (isLoginPage) return false;
 
-    authenticationErrorCount = authenticationErrorCount + 1;
+    setAuthenticationErrorCount(authenticationErrorCount + 1);
 
     if (authenticationErrorCount > 3) {
-      authenticationErrorCount = 0;
+      setAuthenticationErrorCount(0);
       mutationLogout();
       return false;
     }
@@ -145,24 +262,24 @@ function ApiInterceptor() {
   }
 
   async function tryToRenewAccessToken(error: AxiosError) {
-    if (isLoginPage) return;
+    if (isLoginPage) throw error;
     if (error.config?.headers) {
       for (const [key, value] of Object.entries(customHeaders)) {
         error.config.headers[key] = value;
       }
     }
-    mutationRenewAccessToken(undefined, {
-      onSuccess: async () => {
-        authenticationErrorCount = 0;
-        await remakeRequest(error);
-        authenticationErrorCount = 0;
-      },
-      onError: (error) => {
-        console.error(error);
+    try {
+      await mutationRenewAccessToken(undefined);
+      setAuthenticationErrorCount(0);
+    } catch (refreshError) {
+      console.error(refreshError);
+      const isNetworkError =
+        (refreshError as AxiosError)?.response === undefined;
+      if (!isNetworkError) {
         mutationLogout();
-        return Promise.reject("Authentication error");
-      },
-    });
+      }
+      throw refreshError;
+    }
   }
 
   async function clearBuildVerticesState(error) {
@@ -178,23 +295,11 @@ function ApiInterceptor() {
   async function remakeRequest(error: AxiosError) {
     const originalRequest = error.config as AxiosRequestConfig;
 
-    try {
-      const accessToken = cookies.get(LANGFLOW_ACCESS_TOKEN);
-      if (!accessToken) {
-        throw new Error("Access token not found in cookies");
-      }
-
-      // Modify headers in originalRequest
-      originalRequest.headers = {
-        ...(originalRequest.headers as Record<string, string>), // Cast to suppress TypeScript error
-        Authorization: `Bearer ${accessToken}`,
-      };
-
-      const response = await axios.request(originalRequest);
-      return response.data; // Or handle the response as needed
-    } catch (err) {
-      throw err; // Throw the error if request fails again
-    }
+    // Return the full AxiosResponse so when this value resolves the
+    // outer interceptor promise, callers see a normal axios response and
+    // can read ``response.data`` as usual. Returning ``response.data``
+    // here would double-unwrap and produce ``undefined`` at the call site.
+    return axios.request(originalRequest);
   }
 
   return null;
@@ -204,52 +309,64 @@ export type StreamingRequestParams = {
   method: string;
   url: string;
   onData: (event: object) => Promise<boolean>;
+  onDataBatch?: (events: object[]) => Promise<boolean>;
   body?: object;
   onError?: (statusCode: number) => void;
   onNetworkError?: (error: Error) => void;
+  buildController: AbortController;
+  eventDeliveryConfig?: EventDeliveryType;
 };
+
+// Helper function to sanitize JSON strings
+function sanitizeJsonString(jsonStr: string): string {
+  // Replace NaN with null (valid JSON)
+  return jsonStr
+    .replace(/:\s*NaN\b/g, ": null")
+    .replace(/\[\s*NaN\s*\]/g, "[null]")
+    .replace(/,\s*NaN\s*,/g, ", null,")
+    .replace(/,\s*NaN\s*\]/g, ", null]");
+}
 
 async function performStreamingRequest({
   method,
   url,
   onData,
+  onDataBatch,
   body,
   onError,
   onNetworkError,
+  buildController,
 }: StreamingRequestParams) {
-  let headers = {
+  const headers = {
     "Content-Type": "application/json",
     // this flag is fundamental to ensure server stops tasks when client disconnects
     Connection: "close",
   };
-  const accessToken = cookies.get(LANGFLOW_ACCESS_TOKEN);
-  if (accessToken) {
-    headers["Authorization"] = `Bearer ${accessToken}`;
-  }
-  const controller = new AbortController();
-  useFlowStore.getState().setBuildController(controller);
-  const params = {
+
+  const params: RequestInit = {
     method: method,
     headers: headers,
-    signal: controller.signal,
+    signal: buildController.signal,
+    credentials: getFetchCredentials(),
   };
   if (body) {
-    params["body"] = JSON.stringify(body);
+    params.body = JSON.stringify(body);
   }
   let current: string[] = [];
-  let textDecoder = new TextDecoder();
-  const response = await fetch(url, params);
-  if (!response.ok) {
-    if (onError) {
-      onError(response.status);
-    } else {
-      throw new Error("error in streaming request");
-    }
-  }
-  if (response.body === null) {
-    return;
-  }
+  const textDecoder = new TextDecoder();
+
   try {
+    const response = await fetch(url, params);
+    if (!response.ok) {
+      if (onError) {
+        onError(response.status);
+      } else {
+        throw new Error("Error in streaming request.");
+      }
+    }
+    if (response.body === null) {
+      return;
+    }
     const reader = response.body.getReader();
     while (true) {
       const { done, value } = await reader.read();
@@ -257,42 +374,58 @@ async function performStreamingRequest({
         break;
       }
       const decodedChunk = textDecoder.decode(value);
-      let all = decodedChunk.split("\n\n");
+      const all = decodedChunk.split("\n\n");
+
+      // Parse all complete events from this chunk first
+      const parsedEvents: object[] = [];
       for (const string of all) {
         if (string.endsWith("}")) {
           const allString = current.join("") + string;
-          let data: object;
           try {
-            data = JSON.parse(allString);
+            const sanitizedJson = sanitizeJsonString(allString);
+            parsedEvents.push(JSON.parse(sanitizedJson));
             current = [];
-          } catch (e) {
+          } catch (_e) {
             current.push(string);
-            continue;
-          }
-          const shouldContinue = await onData(data);
-          if (!shouldContinue) {
-            controller.abort();
-            return;
           }
         } else {
           current.push(string);
+        }
+      }
+
+      // Dispatch: batch callback processes all chunk events at once,
+      // otherwise fall back to per-event processing.
+      if (onDataBatch && parsedEvents.length > 0) {
+        const shouldContinue = await onDataBatch(parsedEvents);
+        if (!shouldContinue) {
+          buildController.abort();
+          return;
+        }
+      } else {
+        for (const data of parsedEvents) {
+          const shouldContinue = await onData(data);
+          if (!shouldContinue) {
+            buildController.abort();
+            return;
+          }
         }
       }
     }
     if (current.length > 0) {
       const allString = current.join("");
       if (allString) {
-        const data = JSON.parse(current.join(""));
+        const sanitizedJson = sanitizeJsonString(allString);
+        const data = JSON.parse(sanitizedJson);
         await onData(data);
       }
     }
-  } catch (e: any) {
+  } catch (e: unknown) {
     if (onNetworkError) {
-      onNetworkError(e);
+      onNetworkError(e as Error);
     } else {
       throw e;
     }
   }
 }
 
-export { api, ApiInterceptor, performStreamingRequest };
+export { ApiInterceptor, api, performStreamingRequest };

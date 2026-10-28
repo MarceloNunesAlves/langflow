@@ -1,5 +1,20 @@
-from langflow.api.utils import get_suggestion_message
+from typing import Annotated
 from unittest.mock import patch
+
+import pytest
+from fastapi import Depends, FastAPI
+from fastapi.responses import JSONResponse
+from fastapi.testclient import TestClient
+from fastapi_pagination import Params
+from langflow.api.utils import get_suggestion_message, remove_api_keys
+from langflow.api.utils.core import (
+    MIN_PAGE_SIZE,
+    PARAMS_MAX_PAGE_SIZE,
+    build_content_disposition,
+    custom_params,
+    format_exception_message,
+    get_causing_exception,
+)
 from langflow.services.database.models.flow.utils import get_outdated_components
 from langflow.utils.version import get_version_info
 
@@ -16,7 +31,10 @@ def test_get_suggestion_message():
 
     # Test case 3: Multiple outdated components
     outdated_components = ["component1", "component2", "component3"]
-    expected_message = "The flow contains 3 outdated components. We recommend updating the following components: component1, component2, component3."
+    expected_message = (
+        "The flow contains 3 outdated components. "
+        "We recommend updating the following components: component1, component2, component3."
+    )
     assert get_suggestion_message(outdated_components) == expected_message
 
 
@@ -39,3 +57,310 @@ def test_get_outdated_components():
         result = get_outdated_components(flow)
         # Assert the result is as expected
         assert result == expected_outdated_components
+
+
+def test_remove_api_keys():
+    """Test that remove_api_keys properly removes API keys and handles various template structures.
+
+    This test validates the fix for the bug where remove_api_keys would crash when
+    encountering template values without 'name' keys (e.g., Note components with
+    only backgroundColor).
+    """
+    # Test case 1: Flow with API key that should be removed
+    flow_with_api_key = {
+        "data": {
+            "nodes": [
+                {
+                    "data": {
+                        "node": {
+                            "template": {
+                                "api_key": {
+                                    "name": "api_key",
+                                    "value": "secret-123",
+                                    "password": True,
+                                },
+                                "openai_api_key": {
+                                    "name": "openai_api_key",
+                                    "value": "sk-abc123",
+                                    "password": True,
+                                },
+                            }
+                        }
+                    }
+                }
+            ]
+        }
+    }
+
+    result = remove_api_keys(flow_with_api_key)
+    assert result["data"]["nodes"][0]["data"]["node"]["template"]["api_key"]["value"] is None
+    assert result["data"]["nodes"][0]["data"]["node"]["template"]["openai_api_key"]["value"] is None
+
+    # Test case 2: Flow with Note component (no 'name' key) - this is the bug fix
+    flow_with_note = {
+        "data": {
+            "nodes": [
+                {
+                    "data": {
+                        "node": {
+                            "template": {
+                                "backgroundColor": {"value": "#ffffff"},  # No 'name' key
+                                "text": {"value": "Test note"},  # No 'name' key
+                            }
+                        }
+                    }
+                }
+            ]
+        }
+    }
+
+    # This should not raise an error (the bug that was fixed)
+    result = remove_api_keys(flow_with_note)
+    # Values should be preserved since they're not API keys
+    assert result["data"]["nodes"][0]["data"]["node"]["template"]["backgroundColor"]["value"] == "#ffffff"
+    assert result["data"]["nodes"][0]["data"]["node"]["template"]["text"]["value"] == "Test note"
+
+    # Test case 3: Mixed flow with both API keys and template values without 'name'
+    mixed_flow = {
+        "data": {
+            "nodes": [
+                {
+                    "data": {
+                        "node": {
+                            "template": {
+                                "backgroundColor": {"value": "#ffffff"},  # No 'name' key
+                                "api_token": {
+                                    "name": "api_token",
+                                    "value": "token-xyz",
+                                    "password": True,
+                                },
+                                "regular_field": {
+                                    "name": "regular_field",
+                                    "value": "keep-this",
+                                },
+                            }
+                        }
+                    }
+                }
+            ]
+        }
+    }
+
+    result = remove_api_keys(mixed_flow)
+    # backgroundColor should be preserved (no 'name' key)
+    assert result["data"]["nodes"][0]["data"]["node"]["template"]["backgroundColor"]["value"] == "#ffffff"
+    # API token should be removed
+    assert result["data"]["nodes"][0]["data"]["node"]["template"]["api_token"]["value"] is None
+    # Regular field should be kept
+    assert result["data"]["nodes"][0]["data"]["node"]["template"]["regular_field"]["value"] == "keep-this"
+
+    # Test case 4: Flow with auth_token (password field but not password=True)
+    flow_with_non_password_api = {
+        "data": {
+            "nodes": [
+                {
+                    "data": {
+                        "node": {
+                            "template": {
+                                "api_key": {
+                                    "name": "api_key",
+                                    "value": "should-not-be-removed",
+                                    "password": False,  # Not a password field
+                                },
+                            }
+                        }
+                    }
+                }
+            ]
+        }
+    }
+
+    result = remove_api_keys(flow_with_non_password_api)
+    # Should NOT be removed because password is False
+    assert result["data"]["nodes"][0]["data"]["node"]["template"]["api_key"]["value"] == "should-not-be-removed"
+
+    # Test case 5: Empty flow
+    empty_flow = {"data": {"nodes": []}}
+    result = remove_api_keys(empty_flow)
+    assert result == empty_flow
+
+    # Test case 6: Nodes without data.node.template structure (regression)
+    # remove_api_keys must not crash on nodes missing the full structure.
+    sparse_flow = {
+        "data": {
+            "nodes": [
+                {"id": "bare-node"},
+                {"id": "null-data", "data": None},
+                {"id": "no-node-key", "data": {"something": "else"}},
+                {"id": "null-node", "data": {"node": None}},
+                {"id": "no-template", "data": {"node": {"display_name": "Foo"}}},
+                {"id": "null-template", "data": {"node": {"template": None}}},
+            ],
+            "edges": [],
+        }
+    }
+    result = remove_api_keys(sparse_flow)
+    # All nodes survive untouched
+    assert len(result["data"]["nodes"]) == 6
+    assert result["data"]["nodes"][0]["id"] == "bare-node"
+    assert result["data"]["nodes"][1]["data"] is None
+
+
+# ---------------------------------------------------------------------------
+# build_content_disposition - unit tests (no HTTP round-trip needed)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("filename", "expected_ascii", "expected_encoded"),
+    [
+        ("simple.txt", "simple.txt", "simple.txt"),
+        ('a"b.txt', 'a\\"b.txt', "a%22b.txt"),
+        ("a\\b.txt", "a\\\\b.txt", "a%5Cb.txt"),
+        ("../etc/passwd", "../etc/passwd", "..%2Fetc%2Fpasswd"),
+    ],
+)
+def test_build_content_disposition_happy_path(filename, expected_ascii, expected_encoded):
+    header = build_content_disposition(filename)
+    assert header.startswith("attachment; filename=")
+    assert f'filename="{expected_ascii}"' in header
+    assert f"filename*=UTF-8''{expected_encoded}" in header
+
+
+@pytest.mark.parametrize(
+    "filename",
+    [
+        "evil\r\nX-Injected: pwned",
+        "evil\x00.txt",
+        "tab\there.txt",
+        "bell\x07.txt",
+    ],
+)
+def test_build_content_disposition_strips_control_chars(filename):
+    header = build_content_disposition(filename)
+    for char in ("\r", "\n", "\x00", "\t", "\x07"):
+        assert char not in header
+
+
+def test_build_content_disposition_crlf_not_in_output():
+    header = build_content_disposition("evil\r\nX: y")
+    assert "\r" not in header
+    assert "\n" not in header
+
+
+def test_build_content_disposition_empty_filename():
+    header = build_content_disposition("")
+    assert header.startswith("attachment;")
+    assert 'filename=""' in header
+
+
+def test_build_content_disposition_very_long_filename():
+    long_name = "a" * 5000 + ".txt"
+    header = build_content_disposition(long_name)
+    assert "attachment;" in header
+    assert "filename*=UTF-8''" in header
+
+
+def _wrap_like_create_class(exc: Exception) -> ValueError:
+    """Mirror how ``custom.validate.create_class`` wraps a build failure."""
+    msg = f"Error creating class. {type(exc).__name__}({exc!s})."
+    try:
+        raise ValueError(msg) from exc
+    except ValueError as wrapped:
+        return wrapped
+
+
+def _raise_like_shim(raw: ModuleNotFoundError) -> ModuleNotFoundError:
+    """Mirror how a graduated bundle shim re-raises its curated message from the raw import error."""
+    msg = (
+        "The 'datastax' components moved to the 'lfx-datastax' distribution. "
+        "Install it with:  pip install lfx-datastax   "
+        "(or 'pip install langflow', which bundles it)."
+    )
+    try:
+        raise ModuleNotFoundError(msg, name="lfx_datastax") from raw
+    except ModuleNotFoundError as curated:
+        return curated
+
+
+def test_format_exception_message_plain_module_not_found_gets_guidance():
+    cause = ModuleNotFoundError("No module named 'langchain_chroma'", name="langchain_chroma")
+    msg = format_exception_message(_wrap_like_create_class(cause))
+    assert "pip install langchain-chroma" in msg
+
+
+def test_format_exception_message_graduated_shim_message_wins_over_raw_cause():
+    # The graduated case Gabriel flagged: the chain bottoms out at the raw
+    # "No module named 'lfx_datastax'", but the curated shim message must win.
+    raw = ModuleNotFoundError("No module named 'lfx_datastax'", name="lfx_datastax")
+    wrapped = _wrap_like_create_class(_raise_like_shim(raw))
+    msg = format_exception_message(wrapped)
+    assert "moved to the 'lfx-datastax' distribution" in msg
+    assert "pip install langflow" in msg
+    assert not msg.startswith("Error creating class")
+    assert "moved out of the lfx engine" not in msg
+
+
+def test_get_causing_exception_stops_at_curated_shim_error():
+    raw = ModuleNotFoundError("No module named 'lfx_datastax'", name="lfx_datastax")
+    curated = _raise_like_shim(raw)
+    wrapped = _wrap_like_create_class(curated)
+    assert get_causing_exception(wrapped) is curated
+
+
+def _custom_params_client() -> TestClient:
+    app = FastAPI()
+
+    @app.exception_handler(Exception)
+    async def _catch_all(_request, exc):  # mirrors the app-wide handler: a raised error would be a 500
+        return JSONResponse(status_code=500, content={"message": str(exc)})
+
+    @app.get("/probe")
+    def probe(params: Annotated[Params | None, Depends(custom_params)]):
+        return None if params is None else {"page": params.page, "size": params.size}
+
+    return TestClient(app, raise_server_exceptions=False)
+
+
+@pytest.mark.parametrize(
+    ("query", "field"),
+    [
+        ("?page=1&size=101", "size"),
+        ("?page=1&size=1000", "size"),
+        ("?page=1&size=-5", "size"),
+        ("?page=1&size=0", "size"),
+        ("?page=0&size=10", "page"),
+    ],
+)
+def test_custom_params_rejects_out_of_range_with_422(query, field):
+    response = _custom_params_client().get(f"/probe{query}")
+
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["loc"] == ["query", field]
+
+
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        ("", None),
+        ("?page=2&size=10", {"page": 2, "size": 10}),
+        ("?page=1&size=100", {"page": 1, "size": 100}),
+        ("?page=3", {"page": 3, "size": 50}),
+        ("?size=20", {"page": 1, "size": 20}),
+    ],
+)
+def test_custom_params_accepts_in_range(query, expected):
+    response = _custom_params_client().get(f"/probe{query}")
+
+    assert response.status_code == 200
+    assert response.json() == expected
+
+
+def test_params_bounds_match_fastapi_pagination():
+    """PARAMS_MAX_PAGE_SIZE and MIN_PAGE_SIZE must track the limits fastapi_pagination.Params enforces."""
+
+    def bound(field: str, attr: str):
+        return next(m for m in Params.model_fields[field].metadata if hasattr(m, attr))
+
+    assert bound("size", "le").le == PARAMS_MAX_PAGE_SIZE
+    assert bound("page", "ge").ge == MIN_PAGE_SIZE

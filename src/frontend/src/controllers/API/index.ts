@@ -1,44 +1,27 @@
-import { AxiosRequestConfig, AxiosResponse } from "axios";
-import { Edge, Node, ReactFlowJsonObject } from "reactflow";
-import { BASE_URL_API } from "../../constants/constants";
-import { api } from "../../controllers/API/api";
+import type { Edge, Node, ReactFlowJsonObject } from "@xyflow/react";
+import axios, { type AxiosRequestConfig, type AxiosResponse } from "axios";
 import {
-  APIObjectType,
-  Component,
-  CustomComponentRequest,
-  PromptTypeAPI,
-  Users,
+  customGetAppVersions,
+  customGetLatestVersion,
+} from "@/customization/utils/custom-get-app-latest-version";
+import { getBaseUrl } from "@/customization/utils/urls";
+import { api } from "../../controllers/API/api";
+import type {
   VertexBuildTypeAPI,
   VerticesOrderTypeAPI,
-  sendAllProps,
 } from "../../types/api/index";
-import { FlowStyleType, FlowType } from "../../types/flow";
-import { StoreComponentResponse } from "../../types/store";
-import { FlowPoolType } from "../../types/zustand/flow";
-import {
-  APIClassType,
-  BuildStatusTypeAPI,
-  InitTypeAPI,
-  UploadFileTypeAPI,
-} from "./../../types/api/index";
-
-/**
- * Fetches all objects from the API endpoint.
- *
- * @param {boolean} force_refresh - Whether to force a refresh of the data.
- * @returns {Promise<AxiosResponse<APIObjectType>>} A promise that resolves to an AxiosResponse containing all the objects.
- */
-export async function getAll(
-  force_refresh: boolean = true,
-): Promise<AxiosResponse<APIObjectType>> {
-  return await api.get(`${BASE_URL_API}all?force_refresh=${force_refresh}`);
-}
+import type { FlowStyleType, FlowType } from "../../types/flow";
+import type { StoreComponentResponse } from "../../types/store";
 
 const GITHUB_API_URL = "https://api.github.com";
+const DISCORD_API_URL =
+  "https://discord.com/api/v9/invites/EqksyE2EX9?with_counts=true";
 
 export async function getRepoStars(owner: string, repo: string) {
   try {
-    const response = await api.get(`${GITHUB_API_URL}/repos/${owner}/${repo}`);
+    const response = await axios.get(
+      `${GITHUB_API_URL}/repos/${owner}/${repo}`,
+    );
     return response?.data.stargazers_count;
   } catch (error) {
     console.error("Error fetching repository data:", error);
@@ -46,326 +29,26 @@ export async function getRepoStars(owner: string, repo: string) {
   }
 }
 
-/**
- * Sends data to the API for prediction.
- *
- * @param {sendAllProps} data - The data to be sent to the API.
- * @returns {AxiosResponse<any>} The API response.
- */
-export async function sendAll(data: sendAllProps) {
-  return await api.post(`${BASE_URL_API}predict`, data);
-}
-
-/**
- * Checks the prompt for the code block by sending it to an API endpoint.
- * @param {string} name - The name of the field to check.
- * @param {string} template - The template string of the prompt to check.
- * @param {APIClassType} frontend_node - The frontend node to check.
- * @returns {Promise<AxiosResponse<PromptTypeAPI>>} A promise that resolves to an AxiosResponse containing the validation results.
- */
-export async function postValidatePrompt(
-  name: string,
-  template: string,
-  frontend_node: APIClassType,
-): Promise<AxiosResponse<PromptTypeAPI>> {
-  return api.post(`${BASE_URL_API}validate/prompt`, {
-    name,
-    template,
-    frontend_node,
-  });
-}
-
-/**
- * Fetches a list of JSON files from a GitHub repository and returns their contents as an array of FlowType objects.
- *
- * @returns {Promise<FlowType[]>} A promise that resolves to an array of FlowType objects.
- */
-export async function getExamples(): Promise<FlowType[]> {
-  const url =
-    "https://api.github.com/repos/langflow-ai/langflow_examples/contents/examples?ref=main";
-  const response = await api.get(url);
-
-  const jsonFiles = response?.data.filter((file: any) => {
-    return file.name.endsWith(".json");
-  });
-
-  const contentsPromises = jsonFiles.map(async (file: any) => {
-    const contentResponse = await api.get(file.download_url);
-    return contentResponse.data;
-  });
-
-  return await Promise.all(contentsPromises);
-}
-
-/**
- * Saves a new flow to the database.
- *
- * @param {FlowType} newFlow - The flow data to save.
- * @returns {Promise<any>} The saved flow data.
- * @throws Will throw an error if saving fails.
- */
-export async function saveFlowToDatabase(newFlow: {
-  name: string;
-  id: string;
-  data: ReactFlowJsonObject | null;
-  description: string;
-  style?: FlowStyleType;
-  is_component?: boolean;
-  folder_id?: string;
-  endpoint_name?: string;
-}): Promise<FlowType> {
+export async function getDiscordCount() {
   try {
-    const response = await api.post(`${BASE_URL_API}flows/`, {
-      name: newFlow.name,
-      data: newFlow.data,
-      description: newFlow.description,
-      is_component: newFlow.is_component,
-      folder_id: newFlow.folder_id === "" ? null : newFlow.folder_id,
-      endpoint_name: newFlow.endpoint_name,
-    });
+    const response = await axios.get(DISCORD_API_URL);
+    return response?.data.approximate_member_count;
+  } catch (error) {
+    console.error("Error fetching repository data:", error);
+    return null;
+  }
+}
 
-    if (response?.status !== 201) {
-      throw new Error(`HTTP error! status: ${response?.status}`);
+export const getAppVersions = customGetAppVersions;
+export const getLatestVersion = customGetLatestVersion;
+
+export async function createApiKey(name: string, expiresAt?: string | null) {
+  try {
+    const payload: { name: string; expires_at?: string } = { name };
+    if (expiresAt) {
+      payload.expires_at = expiresAt;
     }
-    return response?.data;
-  } catch (error) {
-    console.error(error);
-    throw error;
-  }
-}
-
-/**
- * Reads all flows from the database.
- *
- * @returns {Promise<any>} The flows data.
- * @throws Will throw an error if reading fails.
- */
-export async function readFlowsFromDatabase() {
-  try {
-    const response = await api.get(`${BASE_URL_API}flows/`);
-    if (response && response?.status !== 200) {
-      throw new Error(`HTTP error! status: ${response?.status}`);
-    }
-    return response?.data;
-  } catch (error) {
-    console.error(error);
-    throw error;
-  }
-}
-
-export async function uploadFlowsToDatabase(flows: FormData) {
-  try {
-    const response = await api.post(`${BASE_URL_API}flows/upload/`, flows);
-
-    if (response?.status !== 201) {
-      throw new Error(`HTTP error! status: ${response?.status}`);
-    }
-    return response?.data;
-  } catch (error) {
-    console.error(error);
-    throw error;
-  }
-}
-
-/**
- * Deletes a flow from the database.
- *
- * @param {string} flowId - The ID of the flow to delete.
- * @returns {Promise<any>} The deleted flow data.
- * @throws Will throw an error if deletion fails.
- */
-export async function deleteFlowFromDatabase(flowId: string) {
-  try {
-    const response = await api.delete(`${BASE_URL_API}flows/${flowId}`);
-    if (response.status !== 200) {
-      throw new Error(`HTTP error! status: ${response.status}`);
-    }
-    return response?.data;
-  } catch (error) {
-    console.error(error);
-    throw error;
-  }
-}
-
-/**
- * Fetches a flow from the database by ID.
- *
- * @param {number} flowId - The ID of the flow to fetch.
- * @returns {Promise<any>} The flow data.
- * @throws Will throw an error if fetching fails.
- */
-export async function getFlowFromDatabase(flowId: number) {
-  try {
-    const response = await api.get(`${BASE_URL_API}flows/${flowId}`);
-    if (response && response?.status !== 200) {
-      throw new Error(`HTTP error! status: ${response?.status}`);
-    }
-    return response?.data;
-  } catch (error) {
-    console.error(error);
-    throw error;
-  }
-}
-
-/**
- * Fetches flow styles from the database.
- *
- * @returns {Promise<any>} The flow styles data.
- * @throws Will throw an error if fetching fails.
- */
-export async function getFlowStylesFromDatabase() {
-  try {
-    const response = await api.get(`${BASE_URL_API}flow_styles/`);
-    if (response.status !== 200) {
-      throw new Error(`HTTP error! status: ${response.status}`);
-    }
-    return response?.data;
-  } catch (error) {
-    console.error(error);
-    throw error;
-  }
-}
-
-/**
- * Fetches the version of the API.
- *
- * @returns {Promise<AxiosResponse<any>>} A promise that resolves to an AxiosResponse containing the version information.
- */
-export async function getVersion() {
-  const response = await api.get(`${BASE_URL_API}version`);
-  return response?.data;
-}
-
-/**
- * Fetches the build status of a flow.
- * @param {string} flowId - The ID of the flow to fetch the build status for.
- * @returns {Promise<BuildStatusTypeAPI>} A promise that resolves to an AxiosResponse containing the build status.
- *
- */
-export async function getBuildStatus(
-  flowId: string,
-): Promise<AxiosResponse<BuildStatusTypeAPI>> {
-  return await api.get(`${BASE_URL_API}build/${flowId}/status`);
-}
-
-//docs for postbuildinit
-/**
- * Posts the build init of a flow.
- * @param {string} flowId - The ID of the flow to fetch the build status for.
- * @returns {Promise<InitTypeAPI>} A promise that resolves to an AxiosResponse containing the build status.
- *
- */
-export async function postBuildInit(
-  flow: FlowType,
-): Promise<AxiosResponse<InitTypeAPI>> {
-  return await api.post(`${BASE_URL_API}build/init/${flow.id}`, flow);
-}
-
-// fetch(`/upload/${id}`, {
-//   method: "POST",
-//   body: formData,
-// });
-/**
- * Uploads a file to the server.
- * @param {File} file - The file to upload.
- * @param {string} id - The ID of the flow to upload the file to.
- */
-export async function uploadFile(
-  file: File,
-  id: string,
-): Promise<AxiosResponse<UploadFileTypeAPI>> {
-  const formData = new FormData();
-  formData.append("file", file);
-  return await api.post(`${BASE_URL_API}files/upload/${id}`, formData);
-}
-
-export async function postCustomComponent(
-  code: string,
-  apiClass: APIClassType,
-): Promise<AxiosResponse<CustomComponentRequest>> {
-  // let template = apiClass.template;
-  return await api.post(`${BASE_URL_API}custom_component`, {
-    code,
-    frontend_node: apiClass,
-  });
-}
-
-export async function renewAccessToken() {
-  try {
-    return await api.post(`${BASE_URL_API}refresh`);
-  } catch (error) {
-    throw error;
-  }
-}
-
-export async function getLoggedUser(): Promise<Users | null> {
-  try {
-    const res = await api.get(`${BASE_URL_API}users/whoami`);
-
-    if (res.status === 200) {
-      return res.data;
-    }
-  } catch (error) {
-    throw error;
-  }
-  return null;
-}
-
-export async function getUsersPage(
-  skip: number,
-  limit: number,
-): Promise<Array<Users>> {
-  try {
-    const res = await api.get(
-      `${BASE_URL_API}users/?skip=${skip}&limit=${limit}`,
-    );
-    if (res.status === 200) {
-      return res.data;
-    }
-  } catch (error) {
-    throw error;
-  }
-  return [];
-}
-
-export async function getApiKey() {
-  try {
-    const res = await api.get(`${BASE_URL_API}api_key/`);
-    if (res.status === 200) {
-      return res.data;
-    }
-  } catch (error) {
-    throw error;
-  }
-}
-
-export async function createApiKey(name: string) {
-  try {
-    const res = await api.post(`${BASE_URL_API}api_key/`, { name });
-    if (res.status === 200) {
-      return res.data;
-    }
-  } catch (error) {
-    throw error;
-  }
-}
-
-export async function deleteApiKey(api_key: string) {
-  try {
-    const res = await api.delete(`${BASE_URL_API}api_key/${api_key}`);
-    if (res.status === 200) {
-      return res.data;
-    }
-  } catch (error) {
-    throw error;
-  }
-}
-
-export async function addApiKeyStore(key: string) {
-  try {
-    const res = await api.post(`${BASE_URL_API}api_key/store`, {
-      api_key: key,
-    });
+    const res = await api.post(`${getBaseUrl()}api_key/`, payload);
     if (res.status === 200) {
       return res.data;
     }
@@ -395,7 +78,7 @@ export async function saveFlowStore(
   publicFlow = false,
 ): Promise<FlowType> {
   try {
-    const response = await api.post(`${BASE_URL_API}store/components/`, {
+    const response = await api.post(`${getBaseUrl()}store/components/`, {
       name: newFlow.name,
       data: newFlow.data,
       description: newFlow.description,
@@ -415,15 +98,6 @@ export async function saveFlowStore(
     console.error(error);
     throw error;
   }
-}
-
-/**
- * Fetches the flows from the store.
- * @returns {Promise<>} A promise that resolves to an AxiosResponse containing the build status.
- *
- */
-export async function getFlowsStore(): Promise<AxiosResponse<FlowType[]>> {
-  return await api.get(`${BASE_URL_API}store/`);
 }
 
 export async function getStoreComponents({
@@ -452,8 +126,8 @@ export async function getStoreComponents({
   fields?: Array<string> | null;
 }): Promise<StoreComponentResponse | undefined> {
   try {
-    let url = `${BASE_URL_API}store/components/`;
-    const queryParams: any = [];
+    let url = `${getBaseUrl()}store/components/`;
+    const queryParams: string[] = [];
     if (component_id !== undefined && component_id !== null) {
       queryParams.push(`component_id=${component_id}`);
     }
@@ -507,61 +181,11 @@ export async function getStoreComponents({
   }
 }
 
-export async function postStoreComponents(component: Component) {
-  try {
-    const res = await api.post(`${BASE_URL_API}store/components/`, component);
-    if (res.status === 200) {
-      return res.data;
-    }
-  } catch (error) {
-    throw error;
-  }
-}
-
 export async function getComponent(component_id: string) {
   try {
     const res = await api.get(
-      `${BASE_URL_API}store/components/${component_id}`,
+      `${getBaseUrl()}store/components/${component_id}`,
     );
-    if (res.status === 200) {
-      return res.data;
-    }
-  } catch (error) {
-    throw error;
-  }
-}
-
-export async function searchComponent(
-  query: string | null,
-  page?: number | null,
-  limit?: number | null,
-  status?: string | null,
-  tags?: string[],
-): Promise<StoreComponentResponse | undefined> {
-  try {
-    let url = `${BASE_URL_API}store/components/`;
-    const queryParams: any = [];
-    if (query !== undefined && query !== null) {
-      queryParams.push(`search=${query}`);
-    }
-    if (page !== undefined && page !== null) {
-      queryParams.push(`page=${page}`);
-    }
-    if (limit !== undefined && limit !== null) {
-      queryParams.push(`limit=${limit}`);
-    }
-    if (status !== undefined && status !== null) {
-      queryParams.push(`status=${status}`);
-    }
-    if (tags !== undefined && tags !== null) {
-      queryParams.push(`tags=${tags}`);
-    }
-    if (queryParams.length > 0) {
-      url += `?${queryParams.join("&")}`;
-    }
-
-    const res = await api.get(url);
-
     if (res.status === 200) {
       return res.data;
     }
@@ -572,7 +196,7 @@ export async function searchComponent(
 
 export async function checkHasApiKey() {
   try {
-    const res = await api.get(`${BASE_URL_API}store/check/api_key`);
+    const res = await api.get(`${getBaseUrl()}store/check/api_key`);
     if (res?.status === 200) {
       return res.data;
     }
@@ -583,7 +207,7 @@ export async function checkHasApiKey() {
 
 export async function checkHasStore() {
   try {
-    const res = await api.get(`${BASE_URL_API}store/check/`);
+    const res = await api.get(`${getBaseUrl()}store/check/`);
     if (res?.status === 200) {
       return res.data;
     }
@@ -591,43 +215,6 @@ export async function checkHasStore() {
     throw error;
   }
 }
-
-export async function getCountComponents(is_component?: boolean | null) {
-  try {
-    let url = `${BASE_URL_API}store/components/count`;
-    const queryParams: any = [];
-    if (is_component !== undefined) {
-      queryParams.push(`is_component=${is_component}`);
-    }
-
-    if (queryParams.length > 0) {
-      url += `?${queryParams.join("&")}`;
-    }
-
-    const res = await api.get(url);
-
-    if (res.status === 200) {
-      return res.data;
-    }
-  } catch (error) {
-    throw error;
-  }
-}
-
-export async function getStoreTags() {
-  try {
-    const res = await api.get(`${BASE_URL_API}store/tags`);
-    if (res.status === 200) {
-      return res.data;
-    }
-  } catch (error) {
-    throw error;
-  }
-}
-
-export const postLikeComponent = (componentId: string) => {
-  return api.post(`${BASE_URL_API}store/users/likes/${componentId}`);
-};
 
 /**
  * Updates an existing flow in the Store.
@@ -651,7 +238,7 @@ export async function updateFlowStore(
   id: string,
 ): Promise<FlowType> {
   try {
-    const response = await api.patch(`${BASE_URL_API}store/components/${id}`, {
+    const response = await api.patch(`${getBaseUrl()}store/components/${id}`, {
       name: newFlow.name,
       data: newFlow.data,
       description: newFlow.description,
@@ -672,16 +259,6 @@ export async function updateFlowStore(
   }
 }
 
-export async function requestLogout() {
-  try {
-    const response = await api.post(`${BASE_URL_API}logout`);
-    return response?.data;
-  } catch (error) {
-    console.error(error);
-    throw error;
-  }
-}
-
 export async function getVerticesOrder(
   flowId: string,
   startNodeId?: string | null,
@@ -691,7 +268,7 @@ export async function getVerticesOrder(
 ): Promise<AxiosResponse<VerticesOrderTypeAPI>> {
   // nodeId is optional and is a query parameter
   // if nodeId is not provided, the API will return all vertices
-  const config: AxiosRequestConfig<any> = {};
+  const config: AxiosRequestConfig = {};
   if (stopNodeId) {
     config["params"] = { stop_component_id: stopNodeId };
   } else if (startNodeId) {
@@ -705,7 +282,7 @@ export async function getVerticesOrder(
     data["data"]["edges"] = Edges;
   }
   return await api.post(
-    `${BASE_URL_API}build/${flowId}/vertices`,
+    `${getBaseUrl()}build/${flowId}/vertices`,
     data,
     config,
   );
@@ -718,37 +295,18 @@ export async function postBuildVertex(
   files?: string[],
 ): Promise<AxiosResponse<VertexBuildTypeAPI>> {
   // input_value is optional and is a query parameter
-  let data = {};
+  const data = {};
   if (typeof input_value !== "undefined") {
-    data["inputs"] = { input_value: input_value };
+    data["inputs"] = {
+      input_value: input_value,
+      client_request_time: Date.now(), // Add client timestamp in milliseconds
+    };
   }
   if (data && files) {
     data["files"] = files;
   }
   return await api.post(
-    `${BASE_URL_API}build/${flowId}/vertices/${vertexId}`,
+    `${getBaseUrl()}build/${flowId}/vertices/${vertexId}`,
     data,
   );
-}
-
-export async function downloadImage({ flowId, fileName }): Promise<any> {
-  return await api.get(`${BASE_URL_API}files/images/${flowId}/${fileName}`);
-}
-
-export async function getFlowPool({
-  flowId,
-}: {
-  flowId: string;
-}): Promise<AxiosResponse<{ vertex_builds: FlowPoolType }>> {
-  const config = {};
-  config["params"] = { flow_id: flowId };
-  return await api.get(`${BASE_URL_API}monitor/builds`, config);
-}
-
-export async function deleteFlowPool(
-  flowId: string,
-): Promise<AxiosResponse<any>> {
-  const config = {};
-  config["params"] = { flow_id: flowId };
-  return await api.delete(`${BASE_URL_API}monitor/builds`, config);
 }

@@ -1,12 +1,11 @@
-import {
+import type {
   UseMutationOptions,
   UseMutationResult,
   UseQueryOptions,
   UseQueryResult,
 } from "@tanstack/react-query";
-import { Edge, Node, Viewport } from "reactflow";
-import { ChatInputType, ChatOutputType } from "../chat";
-import { FlowType } from "../flow";
+import type { ChatInputType, ChatOutputType, UsageType } from "../chat";
+import type { FlowType } from "../flow";
 //kind and class are just representative names to represent the actual structure of the object received by the API
 export type APIDataType = { [key: string]: APIKindType };
 export type APIObjectType = { [key: string]: APIKindType };
@@ -14,6 +13,15 @@ export type APIKindType = { [key: string]: APIClassType };
 export type APITemplateType = {
   [key: string]: InputFieldType;
 };
+
+export type ComponentDisplayNamesType = Record<
+  string,
+  {
+    display_name: string[];
+    description: string[];
+    fields?: Record<string, { display_name: string[] }>;
+  }
+>;
 
 export type APICodeValidateType = {
   imports: { errors: Array<string> };
@@ -43,6 +51,8 @@ export type APIClassType = {
   output_types?: Array<string>;
   custom_fields?: CustomFieldsType;
   beta?: boolean;
+  legacy?: boolean;
+  replacement?: string[];
   documentation: string;
   error?: string;
   official?: boolean;
@@ -51,6 +61,9 @@ export type APIClassType = {
   lf_version?: string;
   flow?: FlowType;
   field_order?: string[];
+  tool_mode?: boolean;
+  type?: string;
+  last_updated?: string;
   [key: string]:
     | Array<string>
     | string
@@ -63,6 +76,17 @@ export type APIClassType = {
     | Array<{ types: Array<string>; selected?: string }>;
 };
 
+export type ModelOptionType = {
+  name: string;
+  id?: string;
+  icon?: string;
+  provider?: string;
+  metadata?: {
+    is_disabled_provider?: boolean;
+    [key: string]: unknown;
+  };
+};
+
 export type InputFieldType = {
   type: string;
   required: boolean;
@@ -72,8 +96,10 @@ export type InputFieldType = {
   readonly: boolean;
   password?: boolean;
   multiline?: boolean;
+  // biome-ignore lint/suspicious/noExplicitAny: legacy
   value?: any;
   dynamic?: boolean;
+  api_editable?: boolean;
   proxy?: { id: string; field: string };
   input_types?: Array<string>;
   display_name?: string;
@@ -83,7 +109,15 @@ export type InputFieldType = {
   refresh_button_text?: string;
   combobox?: boolean;
   info?: string;
+  // biome-ignore lint/suspicious/noExplicitAny: legacy
+  options?: any[];
+  active_tab?: number;
+  // biome-ignore lint/suspicious/noExplicitAny: legacy
   [key: string]: any;
+  icon?: string;
+  text?: string;
+  temp_file?: boolean;
+  separator?: string;
 };
 
 export type OutputFieldProxyType = {
@@ -96,19 +130,16 @@ export type OutputFieldType = {
   types: Array<string>;
   selected?: string;
   name: string;
+  group_outputs?: boolean;
+  method?: string;
   display_name: string;
+  info?: string;
   hidden?: boolean;
   proxy?: OutputFieldProxyType;
-};
-export type sendAllProps = {
-  nodes: Node[];
-  edges: Edge[];
-  name: string;
-  description: string;
-  viewport: Viewport;
-  inputs: { text?: string };
-  chatKey: string;
-  chatHistory: { message: string | object; isSend: boolean }[];
+  allows_loop?: boolean;
+  loop_types?: Array<string>;
+  // biome-ignore lint/suspicious/noExplicitAny: legacy
+  options?: { [key: string]: any };
 };
 export type errorsTypeAPI = {
   function: { errors: Array<string> };
@@ -157,11 +188,17 @@ export type changeUser = {
   is_superuser?: boolean;
   password?: string;
   profile_image?: string;
+  optins?: {
+    github_starred?: boolean;
+    discord_clicked?: boolean;
+    dialog_dismissed?: boolean;
+    mcp_dialog_dismissed?: boolean;
+  };
 };
 
 export type resetPasswordType = {
-  password?: string;
-  profile_image?: string;
+  current_password: string;
+  password: string;
 };
 
 export type Users = {
@@ -169,9 +206,16 @@ export type Users = {
   username: string;
   is_active: boolean;
   is_superuser: boolean;
-  profile_image: string;
+  // UserRead.profile_image is nullable; users who never picked one get null.
+  profile_image: string | null;
   create_at: Date;
   updated_at: Date;
+  optins?: {
+    github_starred?: boolean;
+    discord_clicked?: boolean;
+    dialog_dismissed?: boolean;
+    mcp_dialog_dismissed?: boolean;
+  };
 };
 
 export type Component = {
@@ -196,8 +240,10 @@ export type VertexBuildTypeAPI = {
   valid: boolean;
   data: VertexDataTypeAPI;
   timestamp: string;
+  // biome-ignore lint/suspicious/noExplicitAny: legacy
   params: any;
   messages: ChatOutputType[] | ChatInputType[];
+  // biome-ignore lint/suspicious/noExplicitAny: legacy
   artifacts: any | ChatOutputType | ChatInputType;
 };
 
@@ -207,11 +253,13 @@ export type ErrorLogType = {
 };
 
 export type OutputLogType = {
+  // biome-ignore lint/suspicious/noExplicitAny: legacy
   message: any | ErrorLogType;
   type: string;
 };
 export type LogsLogType = {
   name: string;
+  // biome-ignore lint/suspicious/noExplicitAny: legacy
   message: any | ErrorLogType;
   type: string;
 };
@@ -221,13 +269,15 @@ export type LogsLogType = {
 export type VertexDataTypeAPI = {
   results: { [key: string]: string };
   outputs: { [key: string]: OutputLogType };
-  logs: { [key: string]: LogsLogType };
+  logs: { [key: string]: LogsLogType[] };
   messages: ChatOutputType[] | ChatInputType[];
   inactive?: boolean;
   timedelta?: number;
   duration?: string;
+  // biome-ignore lint/suspicious/noExplicitAny: legacy
   artifacts?: any | ChatOutputType | ChatInputType;
   message?: ChatOutputType | ChatInputType;
+  token_usage?: UsageType | null;
 };
 
 export type CodeErrorDataTypeAPI = {
@@ -246,43 +296,112 @@ export type ResponseErrorTypeAPI = {
 export type ResponseErrorDetailAPI = {
   response: { data: { detail: string } };
 };
-export type useQueryFunctionType<T = undefined, R = any> = T extends undefined
+export type useQueryFunctionType<
+  T = undefined,
+  // biome-ignore lint/suspicious/noExplicitAny: legacy
+  R = any,
+  O = {},
+> = T extends undefined
   ? (
-      options?: Omit<UseQueryOptions, "queryFn" | "queryKey">,
+      options?: Omit<UseQueryOptions, "queryFn" | "queryKey"> & O,
     ) => UseQueryResult<R>
   : (
       params: T,
-      options?: Omit<UseQueryOptions, "queryFn" | "queryKey">,
+      options?: Omit<UseQueryOptions, "queryFn" | "queryKey"> & O,
     ) => UseQueryResult<R>;
 
 export type QueryFunctionType = (
   queryKey: UseQueryOptions["queryKey"],
   queryFn: UseQueryOptions["queryFn"],
   options?: Omit<UseQueryOptions, "queryKey" | "queryFn">,
+  // biome-ignore lint/suspicious/noExplicitAny: legacy
 ) => UseQueryResult<any>;
 
 export type MutationFunctionType = (
   mutationKey: UseMutationOptions["mutationKey"],
+  // biome-ignore lint/suspicious/noExplicitAny: legacy
   mutationFn: UseMutationOptions<any, any, any>["mutationFn"],
-  options?: Omit<UseMutationOptions<any, any>, "mutationFn" | "mutationKey">,
+  options?: Omit<
+    // biome-ignore lint/suspicious/noExplicitAny: legacy
+    UseMutationOptions<any, any, any, any>,
+    "mutationFn" | "mutationKey"
+  >,
+  // biome-ignore lint/suspicious/noExplicitAny: legacy
 ) => UseMutationResult<any, any, any, any>;
 
 export type useMutationFunctionType<
   Params,
+  // biome-ignore lint/suspicious/noExplicitAny: legacy
   Variables = any,
+  // biome-ignore lint/suspicious/noExplicitAny: legacy
   Data = any,
+  // biome-ignore lint/suspicious/noExplicitAny: legacy
   Error = any,
 > = Params extends undefined
   ? (
       options?: Omit<
-        UseMutationOptions<Data, Error>,
+        UseMutationOptions<Data, Error, Variables>,
         "mutationFn" | "mutationKey"
       >,
     ) => UseMutationResult<Data, Error, Variables>
   : (
       params: Params,
       options?: Omit<
-        UseMutationOptions<Data, Error>,
+        UseMutationOptions<Data, Error, Variables>,
         "mutationFn" | "mutationKey"
       >,
     ) => UseMutationResult<Data, Error, Variables>;
+
+export type FieldValidatorType =
+  | "no_spaces"
+  | "lowercase"
+  | "uppercase"
+  | "email"
+  | "url"
+  | "alphanumeric"
+  | "numeric"
+  | "alpha"
+  | "phone"
+  | "slug"
+  | "username"
+  | "password";
+
+export type FieldParserType =
+  | "mcp_name_case"
+  | "snake_case"
+  | "camel_case"
+  | "pascal_case"
+  | "kebab_case"
+  | "lowercase"
+  | "uppercase"
+  | "no_blank"
+  | "valid_csv"
+  | "space_case"
+  | "commands"
+  | "sanitize_mcp_name";
+
+export type TableOptionsTypeAPI = {
+  block_add?: boolean;
+  block_delete?: boolean;
+  block_edit?: boolean;
+  block_sort?: boolean;
+  block_filter?: boolean;
+  block_hide?: boolean | string[];
+  block_select?: boolean;
+  hide_options?: boolean;
+  field_validators?: Array<
+    FieldValidatorType | { [key: string]: FieldValidatorType }
+  >;
+  field_parsers?: Array<FieldParserType | { [key: string]: FieldParserType }>;
+  description?: string;
+};
+
+export type TransactionLogsRow = {
+  id: string;
+  timestamp: string;
+  vertex_id: string;
+  target_id: string | null;
+  inputs: Record<string, unknown> | null;
+  outputs: Record<string, unknown> | null;
+  status: string;
+};

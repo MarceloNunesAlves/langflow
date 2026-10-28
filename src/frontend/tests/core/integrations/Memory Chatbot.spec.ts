@@ -1,123 +1,124 @@
-import { expect, test } from "@playwright/test";
-import * as dotenv from "dotenv";
-import path from "path";
+import type { Page } from "@playwright/test";
+import { expect } from "../../fixtures";
+import { configureLoopbackOpenAI } from "../../utils/configure-loopback-openai";
+import { TEXTS } from "../../utils/constants/texts";
+import { openStarterProject } from "../../utils/flow/open-starter-project";
+import { getAllResponseMessage } from "../../utils/get-all-response-message";
+import { sendPlaygroundMessage } from "../../utils/playground/send-playground-message";
+import { seedLoopbackProvider } from "../../utils/seed-loopback-provider";
+import { withEventDeliveryModes } from "../../utils/withEventDeliveryModes";
 
-test("Memory Chatbot", async ({ page }) => {
-  test.skip(
-    !process?.env?.OPENAI_API_KEY,
-    "OPENAI_API_KEY required to run this test",
-  );
+type MemoryBaseCreateResponse = {
+  id: string;
+  name: string;
+};
 
-  if (!process.env.CI) {
-    dotenv.config({ path: path.resolve(__dirname, "../../.env") });
+function getCurrentFlowId(page: Page): string {
+  const flowId = page.url().match(/\/flow\/([^/?#]+)/)?.[1];
+  if (!flowId) {
+    throw new Error(`Could not read flow id from ${page.url()}`);
+  }
+  return flowId;
+}
+
+async function createMemoryBase(page: Page, flowId: string, name: string) {
+  const response = await page.request.post("/api/v1/memories/", {
+    data: {
+      name,
+      flow_id: flowId,
+      embedding_model: "text-embedding-3-small",
+      threshold: 1,
+      auto_capture: false,
+    },
+  });
+  expect(response.status()).toBe(201);
+  return (await response.json()) as MemoryBaseCreateResponse;
+}
+
+async function selectMemoryBase(page: Page, memoryBaseName: string) {
+  const memoryBaseNode = page
+    .locator(".react-flow__node")
+    .filter({ hasText: "Memory Base" })
+    .first();
+  await expect(memoryBaseNode).toBeVisible({ timeout: 30000 });
+  await memoryBaseNode.click();
+  const memoryDropdown = page.getByTestId("dropdown_str_memory_base");
+
+  await memoryDropdown.click();
+  if ((await page.getByText(memoryBaseName, { exact: true }).count()) === 0) {
+    await page.getByTestId("refresh-dropdown-list-memory_base").click();
+    await expect(memoryDropdown).toBeVisible({ timeout: 30000 });
+    await memoryDropdown.click();
   }
 
-  await page.goto("/");
-  await page.waitForSelector('[data-testid="mainpage_title"]', {
-    timeout: 30000,
-  });
+  await page.getByTestId("dropdown_search_input").fill(memoryBaseName);
+  await page.getByTestId("dropdown-option-0-container").click();
+  await expect(
+    page.getByTestId("value-dropdown-dropdown_str_memory_base"),
+  ).toContainText(memoryBaseName);
+}
 
-  await page.waitForSelector('[id="new-project-btn"]', {
-    timeout: 30000,
-  });
+withEventDeliveryModes(
+  "Memory Chatbot",
+  { tag: ["@release", "@starter-projects"] },
+  async ({ page }) => {
+    await seedLoopbackProvider(page);
+    const memoryBaseName = `memory_chatbot_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    let memoryBaseId: string | undefined;
 
-  let modalCount = 0;
-  try {
-    const modalTitleElement = await page?.getByTestId("modal-title");
-    if (modalTitleElement) {
-      modalCount = await modalTitleElement.count();
+    try {
+      await openStarterProject(page, "Memory Chatbot");
+      await page.waitForURL(/\/flow\/[^/?#]+/, { timeout: 100000 });
+      await page.waitForSelector('[data-testid="canvas_controls_dropdown"]', {
+        timeout: 100000,
+      });
+      const memoryBase = await createMemoryBase(
+        page,
+        getCurrentFlowId(page),
+        memoryBaseName,
+      );
+      memoryBaseId = memoryBase.id;
+      await configureLoopbackOpenAI(page);
+      await selectMemoryBase(page, memoryBase.name);
+
+      await page
+        .getByRole("button", { name: TEXTS.playground, exact: true })
+        .click();
+
+      await page
+        .getByText(TEXTS.labelNoInputMessage, { exact: true })
+        .last()
+        .isVisible();
+
+      await sendPlaygroundMessage(
+        page,
+        "In one sentence, explain what long-term memory helps with.",
+      );
+
+      const textContents = await getAllResponseMessage(page);
+      expect(textContents.length).toBeGreaterThan(20);
+
+      // Open message logs from session sidebar menu (chat-header-more-menu is hidden in fullscreen)
+      await page
+        .locator('[data-testid^="session-"][data-testid$="-more-menu"]')
+        .first()
+        .click();
+      await page.getByTestId("message-logs-option").click();
+
+      await expect(page.getByText("timestamp", { exact: true })).toBeVisible();
+      await expect(page.getByText("text", { exact: true })).toBeVisible();
+      await expect(page.getByText("sender", { exact: true })).toBeVisible();
+      await expect(
+        page.getByText("sender_name", { exact: true }),
+      ).toBeVisible();
+      await expect(page.getByText("session_id", { exact: true })).toBeVisible();
+      await expect(page.getByText("files", { exact: true })).toBeVisible();
+    } finally {
+      if (memoryBaseId) {
+        await page.request
+          .delete(`/api/v1/memories/${memoryBaseId}`)
+          .catch(() => undefined);
+      }
     }
-  } catch (error) {
-    modalCount = 0;
-  }
-
-  while (modalCount === 0) {
-    await page.getByText("New Project", { exact: true }).click();
-    await page.waitForTimeout(3000);
-    modalCount = await page.getByTestId("modal-title")?.count();
-  }
-
-  await page.getByRole("heading", { name: "Memory Chatbot" }).click();
-  await page.waitForTimeout(1000);
-
-  await page.getByTitle("fit view").click();
-  await page.getByTitle("zoom out").click();
-  await page.getByTitle("zoom out").click();
-  await page.getByTitle("zoom out").click();
-
-  await page.waitForTimeout(1000);
-
-  let outdatedComponents = await page.getByTestId("icon-AlertTriangle").count();
-
-  while (outdatedComponents > 0) {
-    await page.getByTestId("icon-AlertTriangle").first().click();
-    await page.waitForTimeout(1000);
-    outdatedComponents = await page.getByTestId("icon-AlertTriangle").count();
-  }
-
-  await page
-    .getByTestId("popover-anchor-input-api_key")
-    .fill(process.env.OPENAI_API_KEY ?? "");
-
-  await page.getByTestId("dropdown_str_model_name").click();
-  await page.getByTestId("gpt-4o-1-option").click();
-
-  await page.waitForTimeout(1000);
-
-  await page.getByTestId("button_run_chat output").click();
-  await page.waitForSelector("text=built successfully", { timeout: 30000 });
-
-  await page.getByText("built successfully").last().click({
-    timeout: 15000,
-  });
-
-  await page.getByText("Playground", { exact: true }).click();
-
-  await page
-    .getByText("No input message provided.", { exact: true })
-    .last()
-    .isVisible();
-
-  await page.waitForSelector('[data-testid="input-chat-playground"]', {
-    timeout: 100000,
-  });
-
-  await page
-    .getByTestId("input-chat-playground")
-    .last()
-    .fill("Remember that I'm a lion");
-  await page.getByTestId("icon-LucideSend").last().click();
-
-  await page.waitForSelector('[data-testid="input-chat-playground"]', {
-    timeout: 100000,
-  });
-
-  await page
-    .getByTestId("input-chat-playground")
-    .last()
-    .fill("try reproduce the sound I made in words");
-
-  await page.waitForSelector('[data-testid="icon-LucideSend"]', {
-    timeout: 100000,
-  });
-
-  await page.getByTestId("icon-LucideSend").last().click();
-
-  await page.waitForSelector("text=roar", { timeout: 30000 });
-  await page.getByText("roar").last().isVisible();
-  await page.getByText("Default Session").last().click();
-
-  await page.getByText("timestamp", { exact: true }).last().isVisible();
-  await page.getByText("text", { exact: true }).last().isVisible();
-  await page.getByText("sender", { exact: true }).last().isVisible();
-  await page.getByText("sender_name", { exact: true }).last().isVisible();
-  await page.getByText("session_id", { exact: true }).last().isVisible();
-  await page.getByText("files", { exact: true }).last().isVisible();
-
-  await page.getByRole("gridcell").last().isVisible();
-  await page.getByTestId("icon-Trash2").first().click();
-  await page.waitForSelector('[data-testid="input-chat-playground"]', {
-    timeout: 100000,
-  });
-  await page.getByTestId("input-chat-playground").last().isVisible();
-});
+  },
+);

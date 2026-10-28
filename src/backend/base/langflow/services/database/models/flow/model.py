@@ -1,74 +1,169 @@
 # Path: src/backend/langflow/services/database/models/flow/model.py
 
 import re
-import warnings
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Dict, List, Optional
+from enum import Enum
+from typing import TYPE_CHECKING, Optional
 from uuid import UUID, uuid4
 
 import emoji
-from emoji import purely_emoji  # type: ignore
-from fastapi import HTTPException, status
-from pydantic import field_serializer, field_validator
-from sqlalchemy import UniqueConstraint, Text
+from emoji import purely_emoji
+from lfx.log.logger import logger
+from lfx.schema.validators import ensure_utc
+from lfx.utils.flow_code import normalize_code_for_import
+from pydantic import BaseModel, ValidationInfo, field_serializer, field_validator
+from sqlalchemy import Boolean, String, Text, UniqueConstraint, cast, false, func, or_, text
+from sqlalchemy import Enum as SQLEnum
 from sqlmodel import JSON, Column, Field, Relationship, SQLModel
 
-from langflow.schema import Data
-from langflow.services.database.models.vertex_builds.model import VertexBuildTable
+from langflow.schema.data import Data
 
 if TYPE_CHECKING:
-    from langflow.services.database.models.folder import Folder
-    from langflow.services.database.models.message import MessageTable
-    from langflow.services.database.models.user import User
-    from langflow.services.database.models import TransactionTable
+    from langflow.services.database.models.folder.model import Folder
+    from langflow.services.database.models.user.model import User
+
+HEX_COLOR_LENGTH = 7
+VIRTUAL_FLOW_UUID_VERSION = 5
+
+
+def is_virtual_flow_id(flow_id: UUID) -> bool:
+    """Return whether an ID belongs to the reserved public execution namespace."""
+    return flow_id.version == VIRTUAL_FLOW_UUID_VERSION
+
+
+_ENDPOINT_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
+
+
+def _validate_endpoint_name_value(v: str | None) -> str | None:
+    """Validate that an endpoint name contains only safe URL characters.
+
+    Raises ``ValueError`` on invalid input — callers at the HTTP layer
+    should catch and translate to an appropriate HTTP response.
+    """
+    if v is not None:
+        if not isinstance(v, str):
+            msg = "Endpoint name must be a string"
+            raise ValueError(msg)
+        if not _ENDPOINT_NAME_RE.match(v):
+            msg = "Endpoint name must contain only letters, numbers, hyphens, and underscores"
+            raise ValueError(msg)
+    return v
+
+
+def _serialize_flow_datetime(value):
+    """Serialize a flow timestamp to whole-second ISO-8601 with an explicit offset.
+
+    Shared by ``FlowBase`` (and therefore ``FlowRead``) and ``FlowHeader`` so the
+    two shapes put the same string on the wire for the same instant.
+    """
+    if isinstance(value, datetime):
+        # I'm getting 2024-05-29T17:57:17.631346
+        # and I want 2024-05-29T17:57:17-05:00
+        value = value.replace(microsecond=0)
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.isoformat()
+    return value
+
+
+class AccessTypeEnum(str, Enum):
+    PRIVATE = "PRIVATE"
+    PUBLIC = "PUBLIC"
+
+
+class FlowType(str, Enum):
+    # Extensible: new kinds can be added without a breaking change. Lowercase
+    # values so the stored string matches the wire value (see values_callable).
+    WORKFLOW = "workflow"
+    AGENT = "agent"
 
 
 class FlowBase(SQLModel):
+    # Supresses warnings during migrations
+    __mapper_args__ = {"confirm_deleted_rows": False}
+
     name: str = Field(index=True)
-    description: Optional[str] = Field(default=None, sa_column=Column(Text, index=True, nullable=True))
-    icon: Optional[str] = Field(default=None, nullable=True)
-    icon_bg_color: Optional[str] = Field(default=None, nullable=True)
-    data: Optional[Dict] = Field(default=None, nullable=True)
-    is_component: Optional[bool] = Field(default=False, nullable=True)
-    updated_at: Optional[datetime] = Field(default_factory=lambda: datetime.now(timezone.utc), nullable=True)
-    webhook: Optional[bool] = Field(default=False, nullable=True, description="Can be used on the webhook endpoint")
-    endpoint_name: Optional[str] = Field(default=None, nullable=True, index=True)
+    description: str | None = Field(default=None, sa_column=Column(Text, index=True, nullable=True))
+    icon: str | None = Field(default=None, nullable=True)
+    icon_bg_color: str | None = Field(default=None, nullable=True)
+    gradient: str | None = Field(default=None, nullable=True)
+    data: dict | None = Field(default=None, nullable=True)
+    is_component: bool | None = Field(default=False, nullable=True)
+    updated_at: datetime | None = Field(default_factory=lambda: datetime.now(timezone.utc), nullable=True)
+    webhook: bool | None = Field(default=False, nullable=True, description="Can be used on the webhook endpoint")
+    endpoint_name: str | None = Field(default=None, nullable=True, index=True)
+    tags: list[str] | None = None
+    locked: bool | None = Field(default=False, nullable=True)
+    mcp_enabled: bool | None = Field(default=False, nullable=True, description="Can be exposed in the MCP server")
+    action_name: str | None = Field(
+        default=None, nullable=True, description="The name of the action associated with the flow"
+    )
+    action_description: str | None = Field(
+        default=None,
+        sa_column=Column(Text, nullable=True),
+        description="The description of the action associated with the flow",
+    )
+    access_type: AccessTypeEnum = Field(
+        default=AccessTypeEnum.PRIVATE,
+        sa_column=Column(
+            SQLEnum(
+                AccessTypeEnum,
+                name="access_type_enum",
+                values_callable=lambda enum: [member.value for member in enum],
+            ),
+            nullable=False,
+            server_default=text("'PRIVATE'"),
+        ),
+    )
+    flow_type: FlowType = Field(
+        default=FlowType.WORKFLOW,
+        sa_column=Column(
+            SQLEnum(
+                FlowType,
+                name="flow_type_enum",
+                values_callable=lambda enum: [member.value for member in enum],
+            ),
+            nullable=False,
+            server_default=text("'workflow'"),
+        ),
+        description="Whether the flow is a plain workflow or an agent (publishable over A2A)",
+    )
+    a2a_enabled: bool | None = Field(
+        default=False,
+        sa_column=Column(Boolean, nullable=True, server_default=false()),
+        description="Can be exposed as an A2A agent (only meaningful when flow_type=agent)",
+    )
+    a2a_card_overrides: dict | None = Field(
+        default=None,
+        sa_column=Column(JSON, nullable=True),
+        description="User overrides for the generated A2A agent card (skill description, examples, tags)",
+    )
 
     @field_validator("endpoint_name")
     @classmethod
     def validate_endpoint_name(cls, v):
-        # Endpoint name must be a string containing only letters, numbers, hyphens, and underscores
-        if v is not None:
-            if not isinstance(v, str):
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail="Endpoint name must be a string",
-                )
-            if not re.match(r"^[a-zA-Z0-9_-]+$", v):
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail="Endpoint name must contain only letters, numbers, hyphens, and underscores",
-                )
-        return v
+        return _validate_endpoint_name_value(v)
 
     @field_validator("icon_bg_color")
+    @classmethod
     def validate_icon_bg_color(cls, v):
         if v is not None and not isinstance(v, str):
-            raise ValueError("Icon background color must be a string")
+            msg = "Icon background color must be a string"
+            raise ValueError(msg)
         # validate that is is a hex color
         if v and not v.startswith("#"):
-            raise ValueError("Icon background color must start with #")
+            msg = "Icon background color must start with #"
+            raise ValueError(msg)
 
         # validate that it is a valid hex color
-        if v and len(v) != 7:
-            raise ValueError("Icon background color must be 7 characters long")
+        if v and len(v) != HEX_COLOR_LENGTH:
+            msg = "Icon background color must be 7 characters long"
+            raise ValueError(msg)
         return v
 
     @field_validator("icon")
+    @classmethod
     def validate_icon_atr(cls, v):
-        #   const emojiRegex = /\p{Emoji}/u;
-        # const isEmoji = emojiRegex.test(data?.node?.icon!);
-        # emoji pattern in Python
         if v is None:
             return v
         # we are going to use the emoji library to validate the emoji
@@ -76,15 +171,15 @@ class FlowBase(SQLModel):
 
         if not v.startswith(":") and not v.endswith(":"):
             return v
-        elif not v.startswith(":") or not v.endswith(":"):
+        if not v.startswith(":") or not v.endswith(":"):
             # emoji should have both starting and ending colons
             # so if one of them is missing, we will raise
-            raise ValueError(f"Invalid emoji. {v} is not a valid emoji.")
+            msg = f"Invalid emoji. {v} is not a valid emoji."
+            raise ValueError(msg)
 
         emoji_value = emoji.emojize(v, variant="emoji_type")
         if v == emoji_value:
-            warnings.warn(f"Invalid emoji. {v} is not a valid emoji.")
-            icon = v
+            logger.warning("Invalid emoji. %s is not a valid emoji.", v)
         icon = emoji_value
 
         if purely_emoji(icon):
@@ -92,61 +187,75 @@ class FlowBase(SQLModel):
             return icon
         # otherwise it should be a valid lucide icon
         if v is not None and not isinstance(v, str):
-            raise ValueError("Icon must be a string")
+            msg = "Icon must be a string"
+            raise ValueError(msg)
         # is should be lowercase and contain only letters and hyphens
         if v and not v.islower():
-            raise ValueError("Icon must be lowercase")
+            msg = "Icon must be lowercase"
+            raise ValueError(msg)
         if v and not v.replace("-", "").isalpha():
-            raise ValueError("Icon must contain only letters and hyphens")
+            msg = "Icon must contain only letters and hyphens"
+            raise ValueError(msg)
         return v
 
     @field_validator("data")
-    def validate_json(v):
+    @classmethod
+    def validate_json(cls, v):
         if not v:
             return v
         if not isinstance(v, dict):
-            raise ValueError("Flow must be a valid JSON")
+            msg = "Flow must be a valid JSON"
+            raise ValueError(msg)  # noqa: TRY004
 
         # data must contain nodes and edges
-        if "nodes" not in v.keys():
-            raise ValueError("Flow must have nodes")
-        if "edges" not in v.keys():
-            raise ValueError("Flow must have edges")
+        if "nodes" not in v:
+            msg = "Flow must have nodes"
+            raise ValueError(msg)
+        if "edges" not in v:
+            msg = "Flow must have edges"
+            raise ValueError(msg)
 
         return v
 
     # updated_at can be serialized to JSON
     @field_serializer("updated_at")
-    def serialize_datetime(value):
-        if isinstance(value, datetime):
-            # I'm getting 2024-05-29T17:57:17.631346
-            # and I want 2024-05-29T17:57:17-05:00
-            value = value.replace(microsecond=0)
-            if value.tzinfo is None:
-                value = value.replace(tzinfo=timezone.utc)
-            return value.isoformat()
-        return value
+    def serialize_datetime(self, value):
+        return _serialize_flow_datetime(value)
 
     @field_validator("updated_at", mode="before")
+    @classmethod
     def validate_dt(cls, v):
         if v is None:
             return v
-        elif isinstance(v, datetime):
-            return v
-
-        return datetime.fromisoformat(v)
+        return ensure_utc(v if isinstance(v, datetime) else datetime.fromisoformat(v))
 
 
-class Flow(FlowBase, table=True):  # type: ignore
+class Flow(FlowBase, table=True):  # type: ignore[call-arg]
     id: UUID = Field(default_factory=uuid4, primary_key=True, unique=True)
-    data: Optional[Dict] = Field(default=None, sa_column=Column(JSON))
-    user_id: Optional[UUID] = Field(index=True, foreign_key="user.id", nullable=True)
+    data: dict | None = Field(default=None, sa_column=Column(JSON))
+    user_id: UUID | None = Field(index=True, foreign_key="user.id", nullable=True)
     user: "User" = Relationship(back_populates="flows")
-    folder_id: Optional[UUID] = Field(default=None, foreign_key="folder.id", nullable=True, index=True)
+    icon: str | None = Field(default=None, nullable=True)
+    tags: list[str] | None = Field(sa_column=Column(JSON), default=[])
+    locked: bool | None = Field(default=False, nullable=True)
+    folder_id: UUID | None = Field(default=None, foreign_key="folder.id", nullable=True, index=True)
+    workspace_id: UUID | None = Field(default=None, nullable=True, index=True)
+    fs_path: str | None = Field(default=None, nullable=True)
     folder: Optional["Folder"] = Relationship(back_populates="flows")
-    messages: List["MessageTable"] = Relationship(back_populates="flow")
-    transactions: List["TransactionTable"] = Relationship(back_populates="flow")
-    vertex_builds: List["VertexBuildTable"] = Relationship(back_populates="flow")
+    version_token: UUID | None = Field(
+        default=None,
+        nullable=True,
+        description="Rotated whenever data changes. NULL means the row predates preconditions.",
+    )
+    last_modified_by: UUID | None = Field(
+        default=None,
+        nullable=True,
+        index=True,
+        description=(
+            "Author of the last data change. Not a foreign key: a second path to user.id would "
+            "make the Flow.user relationship ambiguous to SQLAlchemy."
+        ),
+    )
 
     def to_data(self):
         serialized = self.model_dump()
@@ -156,9 +265,9 @@ class Flow(FlowBase, table=True):  # type: ignore
             "name": serialized.pop("name"),
             "description": serialized.pop("description"),
             "updated_at": serialized.pop("updated_at"),
+            "folder_id": serialized.pop("folder_id"),
         }
-        record = Data(data=data)
-        return record
+        return Data(data=data)
 
     __table_args__ = (
         UniqueConstraint("user_id", "name", name="unique_flow_name"),
@@ -166,37 +275,104 @@ class Flow(FlowBase, table=True):  # type: ignore
     )
 
 
+def persisted_flow_history_filter():
+    """Exclude the UUID5 range reserved for virtual public execution histories.
+
+    A legacy Flow row in that range cannot establish ownership of its runtime
+    records. Normalize UUID text because SQLite omits hyphens and Postgres does not.
+    """
+    uuid_hex = func.lower(func.replace(cast(Flow.id, String), "-", ""))
+    return or_(
+        func.substr(uuid_hex, 13, 1) != str(VIRTUAL_FLOW_UUID_VERSION),
+        func.substr(uuid_hex, 17, 1).not_in(("8", "9", "a", "b")),
+    )
+
+
 class FlowCreate(FlowBase):
-    user_id: Optional[UUID] = None
-    folder_id: Optional[UUID] = None
+    # Present on upload means upsert (that ID, if it already belongs to the caller); absent
+    # means a generated UUID, so every existing import path keeps working unchanged.
+    id: UUID | None = None
+    user_id: UUID | None = None
+    folder_id: UUID | None = None
+    workspace_id: UUID | None = None
+    fs_path: str | None = None
+
+    @field_validator("data")
+    @classmethod
+    def normalize_code(cls, value: dict | None) -> dict | None:
+        return normalize_code_for_import(value) if value is not None else value
 
 
 class FlowRead(FlowBase):
     id: UUID
-    user_id: Optional[UUID] = Field()
-    folder_id: Optional[UUID] = Field()
+    user_id: UUID | None = Field()
+    folder_id: UUID | None = Field()
+    workspace_id: UUID | None = Field(default=None)
+    tags: list[str] | None = Field(None, description="The tags of the flow")
+    name_key: str | None = Field(None, description="Stable i18n key derived from the original English name")
+    version_token: UUID | None = Field(None, description="Token identifying the version this response carries")
+
+
+class FlowHeader(BaseModel):
+    """Model representing a header for a flow - Without the data."""
+
+    id: UUID = Field(description="Unique identifier for the flow")
+    name: str = Field(description="The name of the flow")
+    folder_id: UUID | None = Field(
+        None,
+        description="The ID of the folder containing the flow. None if not associated with a folder",
+    )
+    is_component: bool | None = Field(None, description="Flag indicating whether the flow is a component")
+    endpoint_name: str | None = Field(None, description="The name of the endpoint associated with this flow")
+    description: str | None = Field(None, description="A description of the flow")
+    data: dict | None = Field(None, description="The data of the component, if is_component is True")
+    access_type: AccessTypeEnum | None = Field(None, description="The access type of the flow")
+    tags: list[str] | None = Field(None, description="The tags of the flow")
+    mcp_enabled: bool | None = Field(None, description="Flag indicating whether the flow is exposed in the MCP server")
+    flow_type: FlowType | None = Field(None, description="Whether the flow is a plain workflow or an agent")
+    a2a_enabled: bool | None = Field(None, description="Flag indicating whether the flow is exposed as an A2A agent")
+    a2a_card_overrides: dict | None = Field(None, description="User overrides for the served A2A agent card")
+    action_name: str | None = Field(None, description="The name of the action associated with the flow")
+    action_description: str | None = Field(None, description="The description of the action associated with the flow")
+    updated_at: datetime | None = Field(None, description="The timestamp of the last update to the flow")
+
+    # Serialized exactly like ``FlowBase.updated_at`` so a header and a full read
+    # of the same flow carry an identical timestamp string.
+    @field_serializer("updated_at")
+    def serialize_datetime(self, value):
+        return _serialize_flow_datetime(value)
+
+    @field_validator("data", mode="before")
+    @classmethod
+    def validate_flow_header(cls, value: dict, info: ValidationInfo):
+        if not info.data["is_component"]:
+            return None
+        return value
 
 
 class FlowUpdate(SQLModel):
-    name: Optional[str] = None
-    description: Optional[str] = None
-    data: Optional[Dict] = None
-    folder_id: Optional[UUID] = None
-    endpoint_name: Optional[str] = None
+    name: str | None = None
+    description: str | None = None
+    data: dict | None = None
+    folder_id: UUID | None = None
+    workspace_id: UUID | None = None
+    endpoint_name: str | None = None
+    mcp_enabled: bool | None = None
+    locked: bool | None = None
+    action_name: str | None = None
+    action_description: str | None = None
+    access_type: AccessTypeEnum | None = None
+    flow_type: FlowType | None = None
+    a2a_enabled: bool | None = None
+    a2a_card_overrides: dict | None = None
+    fs_path: str | None = None
+
+    @field_validator("data")
+    @classmethod
+    def normalize_code(cls, value: dict | None) -> dict | None:
+        return normalize_code_for_import(value) if value is not None else value
 
     @field_validator("endpoint_name")
     @classmethod
     def validate_endpoint_name(cls, v):
-        # Endpoint name must be a string containing only letters, numbers, hyphens, and underscores
-        if v is not None:
-            if not isinstance(v, str):
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail="Endpoint name must be a string",
-                )
-            if not re.match(r"^[a-zA-Z0-9_-]+$", v):
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail="Endpoint name must contain only letters, numbers, hyphens, and underscores",
-                )
-        return v
+        return _validate_endpoint_name_value(v)

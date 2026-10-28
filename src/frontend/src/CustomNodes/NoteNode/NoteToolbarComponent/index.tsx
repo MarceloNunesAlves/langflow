@@ -1,218 +1,175 @@
-import ShadTooltip from "@/components/shadTooltipComponent";
-import { Button } from "@/components/ui/button";
+import { cloneDeep } from "lodash";
+import { memo, useCallback, useMemo } from "react";
+import { useTranslation } from "react-i18next";
+import IconComponent from "@/components/common/genericIconComponent";
+import ShadTooltip from "@/components/common/shadTooltipComponent";
 import {
   Popover,
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-} from "@/components/ui/select-custom";
+import { Select, SelectTrigger } from "@/components/ui/select";
 import { COLOR_OPTIONS } from "@/constants/constants";
-import ToolbarSelectItem from "@/pages/FlowPage/components/nodeToolbarComponent/toolbarSelectItem";
+import { customOpenNewTab } from "@/customization/utils/custom-open-new-tab";
 import useAlertStore from "@/stores/alertStore";
 import useFlowStore from "@/stores/flowStore";
 import useFlowsManagerStore from "@/stores/flowsManagerStore";
 import { useShortcutsStore } from "@/stores/shortcuts";
-import { NodeDataType, noteDataType } from "@/types/flow";
-import { classNames, cn, openInNewTab } from "@/utils/utils";
-import { cloneDeep, set, take } from "lodash";
-import { useState } from "react";
-import IconComponent from "../../../components/genericIconComponent";
+import type { NoteDataType } from "@/types/flow";
+import { cn } from "@/utils/utils";
+import { ColorPickerButtons } from "../components/color-picker-buttons";
+import { SelectItems } from "../components/select-items";
 
-export default function NoteToolbarComponent({
+interface NoteToolbarProps {
+  data: NoteDataType;
+  bgColor: string;
+}
+
+const NoteToolbarComponent = memo(function NoteToolbarComponent({
   data,
   bgColor,
-}: {
-  data: noteDataType;
-  bgColor: string;
-}) {
-  const setSuccessData = useAlertStore((state) => state.setSuccessData);
+}: NoteToolbarProps) {
+  const { t } = useTranslation();
   const setNoticeData = useAlertStore((state) => state.setNoticeData);
-  const nodes = useFlowStore((state) => state.nodes);
-  const setLastCopiedSelection = useFlowStore(
-    (state) => state.setLastCopiedSelection,
-  );
-  const paste = useFlowStore((state) => state.paste);
-  const shortcuts = useShortcutsStore((state) => state.shortcuts);
   const takeSnapshot = useFlowsManagerStore((state) => state.takeSnapshot);
-  const deleteNode = useFlowStore((state) => state.deleteNode);
-  const setNode = useFlowStore((state) => state.setNode);
+  const shortcuts = useShortcutsStore((state) => state.shortcuts);
 
-  function openDocs() {
+  // Batch store selectors to reduce re-renders
+  const { nodes, setLastCopiedSelection, paste, setNode, deleteNode } =
+    useFlowStore(
+      useCallback(
+        (state) => ({
+          nodes: state.nodes,
+          setLastCopiedSelection: state.setLastCopiedSelection,
+          paste: state.paste,
+          setNode: state.setNode,
+          deleteNode: state.deleteNode,
+        }),
+        [],
+      ),
+    );
+
+  /** Opens documentation URL or shows notice if unavailable */
+  const openDocs = useCallback(() => {
     if (data.node?.documentation) {
-      return openInNewTab(data.node?.documentation);
+      return customOpenNewTab(data.node.documentation);
     }
-    setNoticeData({
-      title: `${data.id} docs is not available at the moment.`,
-    });
-  }
+    setNoticeData({ title: t("node.docsUnavailable", { id: data.id }) });
+  }, [data.node?.documentation, data.id, setNoticeData]);
 
-  const handleSelectChange = (event) => {
-    switch (event) {
-      case "documentation":
-        openDocs();
-        break;
-      case "delete":
-        takeSnapshot();
-        deleteNode(data.id);
-        break;
-      case "copy":
-        const node = nodes.filter((node) => node.id === data.id);
-        setLastCopiedSelection({ nodes: cloneDeep(node), edges: [] });
-        break;
-      case "duplicate":
-        paste(
-          {
-            nodes: [nodes.find((node) => node.id === data.id)!],
-            edges: [],
-          },
-          {
-            x: 50,
-            y: 10,
-            paneX: nodes.find((node) => node.id === data.id)?.position.x,
-            paneY: nodes.find((node) => node.id === data.id)?.position.y,
-          },
-        );
-        break;
-    }
-  };
-  // the deafult value is allways the first one if none is provided
-  return (
-    <>
-      <div className="w-26 noflow nowheel nopan nodelete nodrag h-10">
-        <span className="isolate inline-flex rounded-md shadow-sm">
-          <Popover>
-            <ShadTooltip content="Color pick">
-              <PopoverTrigger>
-                <div>
-                  <div
-                    data-testid="color_picker"
-                    className="relative inline-flex items-center rounded-l-md bg-background px-2 py-2 text-foreground shadow-md ring-1 ring-inset ring-ring transition-all duration-500 ease-in-out hover:bg-muted focus:z-10"
-                  >
-                    <div
-                      style={{
-                        backgroundColor: COLOR_OPTIONS[bgColor],
-                      }}
-                      className="h-4 w-4 rounded-full"
-                    ></div>
-                  </div>
-                </div>
-              </PopoverTrigger>
-            </ShadTooltip>
-            <PopoverContent side="top" className="w-fit px-2 py-2">
-              <div className="flew-row flex gap-3">
-                {Object.entries(COLOR_OPTIONS).map(([color, code]) => {
-                  return (
-                    <Button
-                      data-testid={`color_picker_button_${color}`}
-                      unstyled
-                      key={color}
-                      onClick={() => {
-                        setNode(data.id, (old) => ({
-                          ...old,
-                          data: {
-                            ...old.data,
-                            node: {
-                              ...old.data.node,
-                              template: {
-                                ...old.data.node?.template,
-                                backgroundColor: color,
-                              },
-                            },
-                          },
-                        }));
-                      }}
-                    >
-                      <div
-                        className={cn(
-                          "h-4 w-4 rounded-full hover:border hover:border-ring",
-                          bgColor === color ? "border-2 border-blue-500" : "",
-                        )}
-                        style={{
-                          backgroundColor: code,
-                        }}
-                      ></div>
-                    </Button>
-                  );
-                })}
-              </div>
-            </PopoverContent>
-          </Popover>
-          <Select onValueChange={handleSelectChange} value="">
-            <ShadTooltip content="All" side="top">
-              <SelectTrigger>
-                <div>
-                  <div
-                    data-testid="more-options-modal"
-                    className={classNames(
-                      "relative -ml-px inline-flex h-8 w-[2rem] items-center rounded-r-md bg-background text-foreground shadow-md ring-1 ring-inset ring-ring transition-all duration-500 ease-in-out hover:bg-muted focus:z-10",
-                    )}
-                  >
-                    <IconComponent
-                      name="MoreHorizontal"
-                      className="relative left-2 h-4 w-4"
-                    />
-                  </div>
-                </div>
-              </SelectTrigger>
-            </ShadTooltip>
-            <SelectContent>
-              <SelectItem value={"duplicate"}>
-                <ToolbarSelectItem
-                  shortcut={
-                    shortcuts.find((obj) => obj.name === "Duplicate")?.shortcut!
-                  }
-                  value={"Duplicate"}
-                  icon={"Copy"}
-                  dataTestId="copy-button-modal"
-                />
-              </SelectItem>
-              <SelectItem value={"copy"}>
-                <ToolbarSelectItem
-                  shortcut={
-                    shortcuts.find((obj) => obj.name === "Copy")?.shortcut!
-                  }
-                  value={"Copy"}
-                  icon={"Clipboard"}
-                  dataTestId="copy-button-modal"
-                />
-              </SelectItem>
-              <SelectItem
-                value={"documentation"}
-                disabled={data.node?.documentation === ""}
-              >
-                <ToolbarSelectItem
-                  shortcut={
-                    shortcuts.find((obj) => obj.name === "Docs")?.shortcut!
-                  }
-                  value={"Docs"}
-                  icon={"FileText"}
-                  dataTestId="docs-button-modal"
-                />
-              </SelectItem>
-              <SelectItem value={"delete"} className="focus:bg-red-400/[.20]">
-                <div className="font-red flex text-status-red">
-                  <IconComponent
-                    name="Trash2"
-                    className="relative top-0.5 mr-2 h-4 w-4"
-                  />{" "}
-                  <span className="">Delete</span>{" "}
-                  <span className="absolute right-2 top-2 flex items-center justify-center rounded-sm px-1 py-[0.2]">
-                    <IconComponent
-                      name="Delete"
-                      className="h-4 w-4 stroke-2 text-red-400"
-                    ></IconComponent>
-                  </span>
-                </div>
-              </SelectItem>
-            </SelectContent>
-          </Select>
-        </span>
-      </div>
-    </>
+  /** Handles toolbar menu actions: copy, duplicate, delete, documentation */
+  const handleSelectChange = useCallback(
+    (action: string) => {
+      const currentNode = nodes.find((node) => node.id === data.id);
+
+      switch (action) {
+        case "documentation":
+          openDocs();
+          break;
+
+        case "delete":
+          takeSnapshot();
+          deleteNode(data.id);
+          break;
+
+        case "copy":
+          if (currentNode) {
+            setLastCopiedSelection({
+              nodes: cloneDeep([currentNode]),
+              edges: [],
+            });
+          }
+          break;
+
+        case "duplicate":
+          if (currentNode) {
+            paste(
+              { nodes: [currentNode], edges: [] },
+              {
+                x: 50,
+                y: 10,
+                paneX: currentNode.position.x,
+                paneY: currentNode.position.y,
+              },
+            );
+          }
+          break;
+      }
+    },
+    [
+      openDocs,
+      takeSnapshot,
+      deleteNode,
+      data.id,
+      nodes,
+      setLastCopiedSelection,
+      paste,
+    ],
   );
-}
+
+  const isCustomColor =
+    bgColor && !Object.keys(COLOR_OPTIONS).includes(bgColor);
+
+  // Memoize resolved background color for the color picker indicator
+  const resolvedBgColor = useMemo(
+    () => (isCustomColor ? bgColor : (COLOR_OPTIONS[bgColor] ?? "#00000000")),
+    [bgColor, isCustomColor],
+  );
+
+  const hasVisibleBg = isCustomColor || COLOR_OPTIONS[bgColor] === null;
+
+  return (
+    <div className="noflow nowheel nopan nodelete nodrag h-10 w-26">
+      <span className="isolate inline-flex rounded-md shadow-sm">
+        {/* Color picker popover */}
+        <Popover>
+          <ShadTooltip content={t("noteNode.pickColor")}>
+            <PopoverTrigger>
+              <div
+                data-testid="color_picker"
+                className="relative inline-flex items-center rounded-l-md bg-background px-2 py-2 text-foreground shadow-md transition-all duration-500 ease-in-out hover:bg-muted focus:z-10"
+              >
+                <div
+                  style={{ backgroundColor: resolvedBgColor }}
+                  className={cn(
+                    "h-4 w-4 rounded-full",
+                    hasVisibleBg && "border",
+                  )}
+                />
+              </div>
+            </PopoverTrigger>
+          </ShadTooltip>
+          <PopoverContent side="top" className="w-fit px-2 py-2">
+            <ColorPickerButtons
+              bgColor={bgColor}
+              data={data}
+              setNode={setNode}
+            />
+          </PopoverContent>
+        </Popover>
+
+        {/* More options dropdown */}
+        <Select onValueChange={handleSelectChange} value="">
+          <SelectTrigger variant="plain">
+            <ShadTooltip content={t("nodeToolbar.showMore")} side="top">
+              <div
+                data-testid="more-options-modal"
+                className="relative -ml-px inline-flex h-8 w-[2rem] items-center rounded-r-md bg-background text-foreground shadow-md transition-all duration-500 ease-in-out hover:bg-muted focus:z-10"
+              >
+                <IconComponent
+                  name="MoreHorizontal"
+                  className="relative left-2 h-4 w-4"
+                />
+              </div>
+            </ShadTooltip>
+          </SelectTrigger>
+          <SelectItems shortcuts={shortcuts} data={data} />
+        </Select>
+      </span>
+    </div>
+  );
+});
+
+NoteToolbarComponent.displayName = "NoteToolbarComponent";
+
+export default NoteToolbarComponent;

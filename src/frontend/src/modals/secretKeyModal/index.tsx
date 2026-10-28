@@ -1,39 +1,67 @@
-import * as Form from "@radix-ui/react-form";
 import { useEffect, useRef, useState } from "react";
-import IconComponent from "../../components/genericIconComponent";
-import { Button } from "../../components/ui/button";
-import { Input } from "../../components/ui/input";
-import { COPIED_NOTICE_ALERT } from "../../constants/alerts_constants";
+import { useTranslation } from "react-i18next";
+import { extractApiErrorMessage } from "@/controllers/API/helpers/extract-api-error-message";
+import { ENABLE_DATASTAX_LANGFLOW } from "@/customization/feature-flags";
+import { useGenerateToken } from "@/customization/hooks/use-custom-generate-token";
 import { createApiKey } from "../../controllers/API";
 import useAlertStore from "../../stores/alertStore";
-import { ApiKeyType } from "../../types/components";
+import type { ApiKeyType } from "../../types/components";
 import BaseModal from "../baseModal";
+import { ContentRenderKey } from "./components/content-render";
+import { FormKeyRender } from "./components/form-key-render";
+import { HeaderRender } from "./components/header-render";
+
+export interface ModalConfigProps {
+  title?: string;
+  description?: React.ReactNode;
+  inputLabel?: React.ReactNode;
+  inputPlaceholder?: string;
+  buttonText?: string;
+  generatedKeyMessage?: React.ReactNode;
+  showIcon?: boolean;
+}
+
+interface SecretKeyModalProps {
+  userId?: string;
+  size?: string;
+  modalProps?: ModalConfigProps;
+}
 
 export default function SecretKeyModal({
   children,
   data,
   onCloseModal,
-}: ApiKeyType) {
+  modalProps,
+}: ApiKeyType & { modalProps: SecretKeyModalProps }) {
+  const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const [apiKeyName, setApiKeyName] = useState(data?.apikeyname ?? "");
   const [apiKeyValue, setApiKeyValue] = useState("");
+  const [expiresAt, setExpiresAt] = useState<string>("");
   const [renderKey, setRenderKey] = useState(false);
   const [textCopied, setTextCopied] = useState(true);
+  // Key-creation failure, surfaced inline and associated with the name field
+  // (WCAG 3.3.1) — it was previously swallowed entirely.
+  const [serverError, setServerError] = useState<string | null>(null);
   const setSuccessData = useAlertStore((state) => state.setSuccessData);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const generateToken = useGenerateToken();
+  const modalConfigProps = modalProps?.modalProps ?? modalProps;
 
   useEffect(() => {
     if (open) {
       setRenderKey(false);
       resetForm();
     } else {
-      onCloseModal();
+      onCloseModal?.();
     }
   }, [open]);
 
   function resetForm() {
     setApiKeyName("");
     setApiKeyValue("");
+    setExpiresAt("");
+    setServerError(null);
   }
 
   const handleCopyClick = async () => {
@@ -42,7 +70,7 @@ export default function SecretKeyModal({
       inputRef?.current?.focus();
       inputRef?.current?.select();
       setSuccessData({
-        title: COPIED_NOTICE_ALERT,
+        title: t("alerts.apiKeyCopied"),
       });
       setTextCopied(false);
 
@@ -53,96 +81,117 @@ export default function SecretKeyModal({
   };
 
   function handleAddNewKey() {
-    createApiKey(apiKeyName)
+    // Append local end-of-day (no "Z" suffix) so the Date constructor treats it
+    // as local time, giving UTC+ users a key that expires at midnight their time.
+    const isoExpiry = expiresAt
+      ? new Date(expiresAt + "T23:59:59").toISOString()
+      : null;
+    createApiKey(apiKeyName, isoExpiry)
       .then((res) => {
         setApiKeyValue(res["api_key"]);
       })
-      .catch((err) => {});
+      .catch((err) => {
+        // Return to the form view instead of showing an empty "generated key"
+        // screen, and tell the user what went wrong. Raw 5xx detail ("Internal
+        // Server Error") is no help — prefer the translated message there.
+        setRenderKey(false);
+        const status = err?.response?.status;
+        setServerError(
+          typeof status === "number" && status >= 500
+            ? t("errors.errorGeneratingApiKey")
+            : extractApiErrorMessage(err, t("errors.errorGeneratingApiKey")),
+        );
+      });
   }
 
-  function handleSubmitForm() {
+  async function handleSubmitForm() {
+    if (apiKeyValue) setOpen(false);
+    if (ENABLE_DATASTAX_LANGFLOW) {
+      handleDataStaxKey();
+    } else {
+      handleOSSKey();
+    }
+  }
+
+  const handleDataStaxKey = async () => {
+    try {
+      const { token } = await generateToken();
+      setApiKeyValue(token);
+      setRenderKey(true);
+    } catch (error) {
+      console.error("Error generating token:", error);
+    }
+  };
+
+  const handleOSSKey = () => {
     if (!renderKey) {
       setRenderKey(true);
       handleAddNewKey();
     } else {
       setOpen(false);
     }
-  }
+  };
 
   return (
     <BaseModal
       onSubmit={handleSubmitForm}
-      size="small-h-full"
+      size={modalProps?.size ?? "small-h-full"}
       open={open}
       setOpen={setOpen}
     >
       <BaseModal.Trigger asChild>{children}</BaseModal.Trigger>
       <BaseModal.Header
+        clampDescription={3}
         description={
           renderKey ? (
-            <>
-              {" "}
-              Please save this secret key somewhere safe and accessible. For
-              security reasons,{" "}
-              <strong>you won't be able to view it again</strong> through your
-              account. If you lose this secret key, you'll need to generate a
-              new one.
-            </>
+            <>{modalConfigProps?.generatedKeyMessage}</>
           ) : (
-            <>Create a secret API Key to use Langflow API.</>
+            <>{modalConfigProps?.description}</>
           )
         }
       >
-        <span className="pr-2">Create API Key</span>
-        <IconComponent
-          name="Key"
-          className="h-6 w-6 pl-1 text-foreground"
-          aria-hidden="true"
+        <HeaderRender
+          title={modalConfigProps?.title}
+          showIcon={modalConfigProps?.showIcon}
         />
       </BaseModal.Header>
       <BaseModal.Content>
         {renderKey ? (
-          <>
-            <div className="flex items-center gap-3">
-              <div className="w-full">
-                <Input ref={inputRef} readOnly={true} value={apiKeyValue} />
-              </div>
-
-              <Button
-                onClick={() => {
-                  handleCopyClick();
-                }}
-                unstyled
-              >
-                {textCopied ? (
-                  <IconComponent name="Copy" className="h-4 w-4" />
-                ) : (
-                  <IconComponent name="Check" className="h-4 w-4" />
-                )}
-              </Button>
-            </div>
-          </>
+          <ContentRenderKey
+            inputLabel={String(modalConfigProps?.inputLabel ?? "")}
+            inputRef={inputRef}
+            apiKeyValue={apiKeyValue}
+            handleCopyClick={handleCopyClick}
+            textCopied={textCopied}
+            renderKey={renderKey}
+          />
+        ) : ENABLE_DATASTAX_LANGFLOW ? (
+          <></>
         ) : (
-          <Form.Field name="apikey">
-            <div className="flex items-center justify-between gap-2">
-              <Form.Control asChild>
-                <Input
-                  //fake api key
-                  id="primary-input"
-                  value={apiKeyName}
-                  ref={inputRef}
-                  onChange={({ target: { value } }) => {
-                    setApiKeyName(value);
-                  }}
-                  placeholder="Insert a name for your API Key"
-                />
-              </Form.Control>
-            </div>
-          </Form.Field>
+          <FormKeyRender
+            modalProps={modalConfigProps}
+            apiKeyName={apiKeyName}
+            inputRef={inputRef}
+            setApiKeyName={(value) => {
+              setApiKeyName(value);
+              setServerError(null);
+            }}
+            expiresAt={expiresAt}
+            setExpiresAt={(value) => {
+              setExpiresAt(value);
+              setServerError(null);
+            }}
+            serverError={serverError}
+          />
         )}
       </BaseModal.Content>
       <BaseModal.Footer
-        submit={{ label: renderKey ? "Done" : "Create Secret Key" }}
+        submit={{
+          label: renderKey
+            ? t("modal.secretKey.doneButton")
+            : (modalConfigProps?.buttonText ?? ""),
+          dataTestId: "secret_key_modal_submit_button",
+        }}
       />
     </BaseModal>
   );

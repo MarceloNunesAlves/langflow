@@ -1,80 +1,88 @@
-import { expect, test } from "@playwright/test";
 import { readFileSync } from "fs";
+import { expect, test } from "../../fixtures";
+import { awaitBootstrapTest } from "../../utils/await-bootstrap-test";
+import { TEXTS } from "../../utils/constants/texts";
+import {
+  getSidebarProjectButton,
+  getSidebarProjectOptionsButton,
+  getSidebarProjectRowById,
+} from "../../utils/project-sidebar";
+import { renameFlow } from "../../utils/rename-flow";
 
-test("CRUD folders", async ({ page }) => {
-  await page.goto("/");
-  await page.waitForSelector('[data-testid="mainpage_title"]', {
-    timeout: 30000,
-  });
+test(
+  "CRUD folders",
+  { tag: ["@release", "@api"] },
 
-  await page.waitForSelector('[id="new-project-btn"]', {
-    timeout: 30000,
-  });
+  async ({ page }) => {
+    await awaitBootstrapTest(page);
 
-  let modalCount = 0;
-  try {
-    const modalTitleElement = await page?.getByTestId("modal-title");
-    if (modalTitleElement) {
-      modalCount = await modalTitleElement.count();
-    }
-  } catch (error) {
-    modalCount = 0;
-  }
+    await page.getByTestId("side_nav_options_all-templates").click();
+    await page
+      .getByRole("heading", { name: TEXTS.templateBasicPrompting })
+      .click();
 
-  while (modalCount === 0) {
-    await page.getByText("New Project", { exact: true }).click();
-    await page.waitForTimeout(3000);
-    modalCount = await page.getByTestId("modal-title")?.count();
-  }
-  await page.getByRole("heading", { name: "Basic Prompting" }).click();
-
-  await page.waitForSelector('[data-testid="icon-ChevronLeft"]', {
-    timeout: 100000,
-  });
-
-  await page.getByTestId("icon-ChevronLeft").first().click();
-
-  await page.getByText("My Collection").nth(2).isVisible();
-  await page.getByPlaceholder("Search flows").isVisible();
-  await page.getByText("Flows").isVisible();
-  await page.getByText("Components").isVisible();
-  await page.getByText("All").first().isVisible();
-  await page.getByText("Select All").isVisible();
-
-  await page.getByTestId("add-folder-button").click();
-  await page.getByText("New Folder").last().isVisible();
-  await page.waitForTimeout(1000);
-  await page.getByText("New Folder").last().dblclick();
-
-  const element = await page.getByTestId("input-folder");
-  await element.fill("new folder test name");
-
-  await page.getByText("My Projects").last().click({
-    force: true,
-  });
-
-  await page.getByText("new folder test name").last().waitFor({
-    state: "visible",
-    timeout: 30000,
-  });
-
-  await page
-    .getByText("new folder test name")
-    .last()
-    .hover()
-    .then(async () => {
-      await page.getByTestId("btn-delete-folder").last().click();
+    await page.waitForSelector('[data-testid="sidebar-search-input"]', {
+      timeout: 100000,
     });
 
-  await page.getByText("Delete").last().click();
-  await page.waitForTimeout(1000);
-  await page.getByText("Folder deleted successfully").isVisible();
-});
+    await page.getByTestId("icon-ChevronLeft").first().click();
+    await expect(page.getByPlaceholder("Search flows").first()).toBeVisible();
+    await expect(page.getByText("Flows").first()).toBeVisible();
+    if (await page.getByText(TEXTS.labelComponents).first().isVisible()) {
+      await expect(page.getByText(TEXTS.labelComponents).first()).toBeVisible();
+    } else {
+      await expect(page.getByText("MCP Server").first()).toBeVisible();
+    }
+    const createdProjectResponse = page.waitForResponse(
+      (response) =>
+        response.request().method() === "POST" &&
+        new URL(response.url()).pathname === "/api/v1/projects/",
+    );
+    await page.getByTestId("add-project-button").click();
+    const createdResponse = await createdProjectResponse;
+    expect(createdResponse.status()).toBe(201);
+    const createdProject = await createdResponse.json();
+    const projectRow = getSidebarProjectRowById(page, createdProject.id);
+    await expect(projectRow).toBeVisible();
+
+    await projectRow.getByTestId(/^sidebar-nav-/).dblclick();
+
+    const element = page.getByTestId("input-project");
+    await element.fill("new project test name");
+    const renamedProjectResponse = page.waitForResponse(
+      (response) =>
+        response.request().method() === "PATCH" &&
+        new URL(response.url()).pathname ===
+          `/api/v1/projects/${createdProject.id}`,
+    );
+    await element.press("Enter");
+    const renamedResponse = await renamedProjectResponse;
+    expect(renamedResponse.status()).toBe(200);
+    expect((await renamedResponse.json()).name).toBe("new project test name");
+    await expect(
+      getSidebarProjectButton(page, "new project test name"),
+    ).toBeVisible({ timeout: 30000 });
+
+    await getSidebarProjectButton(page, "new project test name").last().hover();
+
+    await getSidebarProjectOptionsButton(page, "new project test name").waitFor(
+      { state: "visible", timeout: 5000 },
+    );
+
+    await getSidebarProjectOptionsButton(page, "new project test name").click();
+
+    await page.getByTestId("btn-delete-project").click();
+    await page.getByText(TEXTS.delete).last().click();
+    await expect(page.getByText(TEXTS.toastProjectDeleted)).toBeVisible({
+      timeout: 3000,
+    });
+  },
+);
 
 test("add a flow into a folder by drag and drop", async ({ page }) => {
   await page.goto("/");
 
-  await page.waitForSelector("text=my collection", {
+  await page.waitForSelector("text=New Flow", {
     timeout: 50000,
   });
 
@@ -82,7 +90,8 @@ test("add a flow into a folder by drag and drop", async ({ page }) => {
 
   // Wait for the target element to be available before evaluation
 
-  await page.waitForSelector('[data-testid="sidebar-nav-My Projects"]', {
+  await getSidebarProjectButton(page, "Starter Project").waitFor({
+    state: "visible",
     timeout: 100000,
   });
   // Create the DataTransfer and File
@@ -97,11 +106,12 @@ test("add a flow into a folder by drag and drop", async ({ page }) => {
   }, jsonContent);
 
   // Now dispatch
-  await page.getByTestId("sidebar-nav-My Projects").dispatchEvent("drop", {
+  await getSidebarProjectButton(page, "Starter Project").dispatchEvent("drop", {
     dataTransfer,
   });
+  // wait for the file to be uploaded failed with waitforselector
 
-  await page.waitForTimeout(3000);
+  await page.waitForTimeout(1000);
 
   const genericNode = page.getByTestId("div-generic-node");
   const elementCount = await genericNode?.count();
@@ -109,9 +119,11 @@ test("add a flow into a folder by drag and drop", async ({ page }) => {
     expect(true).toBeTruthy();
   }
 
-  await page.getByTestId("sidebar-nav-My Projects").click();
+  await getSidebarProjectButton(page, "Starter Project").click();
 
-  await page.waitForTimeout(1000);
+  await page.waitForSelector("text=Getting Started:", {
+    timeout: 100000,
+  });
 
   expect(
     await page.locator("text=Getting Started:").last().isVisible(),
@@ -128,57 +140,75 @@ test("add a flow into a folder by drag and drop", async ({ page }) => {
 });
 
 test("change flow folder", async ({ page }) => {
-  await page.goto("/");
-  await page.waitForSelector('[data-testid="mainpage_title"]', {
-    timeout: 30000,
-  });
+  const uniqueFlowName = `move-${Math.random().toString(36).substring(2, 10)}`;
+  const destinationProjectName = `dest-${Math.random().toString(36).substring(2, 10)}`;
 
-  await page.waitForSelector('[id="new-project-btn"]', {
-    timeout: 30000,
-  });
+  await awaitBootstrapTest(page);
 
-  let modalCount = 0;
-  try {
-    const modalTitleElement = await page?.getByTestId("modal-title");
-    if (modalTitleElement) {
-      modalCount = await modalTitleElement.count();
-    }
-  } catch (error) {
-    modalCount = 0;
-  }
+  // Create a flow in the Starter Project and rename it to something
+  // unique so our assertions can't collide with any template that
+  // Starter ships with by default.
+  await page.getByTestId("side_nav_options_all-templates").click();
+  await page
+    .getByRole("heading", { name: TEXTS.templateBasicPrompting })
+    .click();
 
-  while (modalCount === 0) {
-    await page.getByText("New Project", { exact: true }).click();
-    await page.waitForTimeout(3000);
-    modalCount = await page.getByTestId("modal-title")?.count();
-  }
-  await page.getByRole("heading", { name: "Basic Prompting" }).click();
-
-  await page.waitForSelector('[data-testid="icon-ChevronLeft"]', {
+  await page.waitForSelector('[data-testid="sidebar-search-input"]', {
     timeout: 100000,
   });
+  await page.waitForTimeout(1000);
+
+  await renameFlow(page, { flowName: uniqueFlowName });
+
+  await page.waitForTimeout(1000);
 
   await page.getByTestId("icon-ChevronLeft").first().click();
+  await expect(page.getByPlaceholder("Search flows")).toBeVisible();
 
-  await page.getByText("My Collection").nth(2).isVisible();
-  await page.getByPlaceholder("Search flows").isVisible();
-  await page.getByText("Flows").isVisible();
-  await page.getByText("Components").isVisible();
-  await page.getByText("All").first().isVisible();
-  await page.getByText("Select All").isVisible();
-
-  await page.getByTestId("add-folder-button").click();
-  await page.getByText("New Folder").last().isVisible();
-  await page.waitForTimeout(1000);
-  await page.getByText("New Folder").last().dblclick();
-  await page.getByTestId("input-folder").fill("new folder test name");
+  await page.getByTestId("add-project-button").click();
+  await page
+    .locator("[data-testid='project-sidebar']")
+    .getByText(TEXTS.labelNewProject)
+    .last()
+    .waitFor({ state: "visible", timeout: 10000 });
+  await page
+    .locator("[data-testid='project-sidebar']")
+    .getByText(TEXTS.labelNewProject)
+    .last()
+    .dblclick();
+  await page.getByTestId("input-project").fill(destinationProjectName);
   await page.keyboard.press("Enter");
-  await page.getByText("new folder test name").last().isVisible();
+  await expect(
+    getSidebarProjectButton(page, destinationProjectName),
+  ).toBeVisible({ timeout: 10000 });
 
-  await page.getByText("My Projects").last().click();
-  await page.getByText("Basic Prompting").first().hover();
-  await page.mouse.down();
-  await page.getByText("test").first().hover();
-  await page.mouse.up();
-  await page.getByText("Basic Prompting").first().isVisible();
+  // Go back to the source project where the flow currently lives.
+  await getSidebarProjectButton(page, "Starter Project").click();
+  await expect(
+    page.getByTestId("list-card").filter({ hasText: uniqueFlowName }),
+  ).toHaveCount(1, { timeout: 10000 });
+
+  // Real HTML5 drag-and-drop: `dragTo()` populates `DataTransfer` so
+  // the `use-on-file-drop.ts` handler reads `getData("flow")` and
+  // triggers the folder-change mutation. `mouse.down/up` would NOT.
+  await page
+    .getByTestId("list-card")
+    .filter({ hasText: uniqueFlowName })
+    .first()
+    .dragTo(getSidebarProjectButton(page, destinationProjectName));
+
+  // Click the destination folder and verify the moved flow is visible
+  // WITHOUT a manual page refresh. This is the behavior that regresses
+  // when the patch-flow cache invalidation is incomplete.
+  await getSidebarProjectButton(page, destinationProjectName).click();
+
+  await expect(
+    page.getByTestId("list-card").filter({ hasText: uniqueFlowName }),
+  ).toHaveCount(1, { timeout: 10000 });
+
+  // And the flow must NOT remain in the source project.
+  await getSidebarProjectButton(page, "Starter Project").click();
+  await expect(
+    page.getByTestId("list-card").filter({ hasText: uniqueFlowName }),
+  ).toHaveCount(0, { timeout: 10000 });
 });

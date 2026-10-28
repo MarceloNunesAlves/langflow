@@ -4,19 +4,10 @@ import "ace-builds/src-noconflict/mode-python";
 import "ace-builds/src-noconflict/theme-github";
 import "ace-builds/src-noconflict/theme-twilight";
 // import "ace-builds/webpack-resolver";
-import { cloneDeep, set } from "lodash";
-import { useEffect, useState } from "react";
-import JsonView from "react18-json-view";
-import "react18-json-view/src/dark.css";
-import "react18-json-view/src/style.css";
-import IconComponent from "../../components/genericIconComponent";
+import { useState } from "react";
+import { useTranslation } from "react-i18next";
+import IconComponent from "../../components/common/genericIconComponent";
 import { Button } from "../../components/ui/button";
-import {
-  CODE_DICT_DIALOG_SUBTITLE,
-  TEXT_DIALOG_SUBTITLE,
-} from "../../constants/constants";
-import TextOutputView from "../../shared/components/textOutputView";
-import { useDarkStore } from "../../stores/darkStore";
 import BaseModal from "../baseModal";
 import TextEditorArea from "./components/textEditorArea";
 
@@ -31,14 +22,35 @@ export default function TextModal({
   setValue: (value: string) => void;
   editable?: boolean;
 }): JSX.Element {
+  const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const [internalValue, setInternalValue] = useState(value);
 
+  const handleEscapeKeyDown = (event: KeyboardEvent) => {
+    setOpen(false);
+    event.stopPropagation();
+  };
+
   return (
-    <BaseModal size="medium-h-full" open={open} setOpen={setOpen}>
-      <BaseModal.Trigger className="h-full">{children}</BaseModal.Trigger>
+    <BaseModal
+      size="medium-h-full"
+      open={open}
+      setOpen={setOpen}
+      onEscapeKeyDown={handleEscapeKeyDown}
+    >
+      <BaseModal.Trigger asChild>
+        <button
+          type="button"
+          tabIndex={-1}
+          data-langflow-text-cell-trigger
+          aria-haspopup="dialog"
+          className="flex h-6 min-h-6 w-full items-center truncate text-left leading-6"
+        >
+          {children}
+        </button>
+      </BaseModal.Trigger>
       <BaseModal.Header description={""}>
-        <span className="pr-2">View Text</span>
+        <span className="pr-2">{t("modal.viewText")}</span>
         <IconComponent
           name="Type"
           className="h-6 w-6 pl-1 text-primary"
@@ -52,6 +64,7 @@ export default function TextModal({
               readonly={!editable}
               onChange={(text) => setInternalValue(text)}
               value={internalValue}
+              resizable={false}
               left={false}
             />
           </div>
@@ -67,12 +80,9 @@ export default function TextModal({
                 setOpen(false);
               }}
             >
-              Save
+              {t("modal.saveButton")}
             </Button>
           )}
-          <Button className="flex gap-2 px-3" onClick={() => setOpen(false)}>
-            Close
-          </Button>
         </div>
       </BaseModal.Footer>
     </BaseModal>

@@ -1,10 +1,12 @@
-import { useGetTagsQuery } from "@/controllers/API/queries/store";
-import useSaveFlow from "@/hooks/flows/use-save-flow";
 import { cloneDeep } from "lodash";
-import { ReactNode, useEffect, useMemo, useState } from "react";
-import EditFlowSettings from "../../components/editFlowSettingsComponent";
-import IconComponent from "../../components/genericIconComponent";
-import { TagsSelector } from "../../components/tagsSelectorComponent";
+import { type ReactNode, useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
+import { handleBlockedSave } from "@/hooks/flows/handle-blocked-save";
+import useSaveFlow from "@/hooks/flows/use-save-flow";
+import { useUtilityStore } from "@/stores/utilityStore";
+import IconComponent from "../../components/common/genericIconComponent";
+import { TagsSelector } from "../../components/common/tagsSelectorComponent";
+import EditFlowSettings from "../../components/core/editFlowSettingsComponent";
 import { Button } from "../../components/ui/button";
 import { Checkbox } from "../../components/ui/checkbox";
 import {
@@ -15,7 +17,7 @@ import {
 import useAlertStore from "../../stores/alertStore";
 import { useDarkStore } from "../../stores/darkStore";
 import { useStoreStore } from "../../stores/storeStore";
-import { FlowType } from "../../types/flow";
+import type { FlowType } from "../../types/flow";
 import {
   downloadNode,
   removeApiKeys,
@@ -41,6 +43,7 @@ export default function ShareModal({
   setOpen?: (open: boolean) => void;
   disabled?: boolean;
 }): JSX.Element {
+  const { t } = useTranslation();
   const version = useDarkStore((state) => state.version);
   const hasStore = useStoreStore((state) => state.hasStore);
   const hasApiKey = useStoreStore((state) => state.hasApiKey);
@@ -59,7 +62,7 @@ export default function ShareModal({
     { id: string; name: string }[]
   >([]);
   const saveFlow = useSaveFlow();
-  const { data, isFetching } = useGetTagsQuery();
+  const tags = useUtilityStore((state) => state.tags);
 
   const [loadingNames, setLoadingNames] = useState(false);
 
@@ -81,6 +84,7 @@ export default function ShareModal({
       fields: ["name", "id", "is_component"],
       filterByUser: true,
     }).then((res) => {
+      // biome-ignore lint/suspicious/noExplicitAny: legacy
       res?.results?.forEach((element: any) => {
         if ((element.is_component ?? false) === is_component)
           unavaliableNames.push({ name: element.name, id: element.id });
@@ -104,33 +108,41 @@ export default function ShareModal({
 
     function successShare() {
       if (!is_component) {
-        saveFlow(flow);
+        saveFlow(flow).catch(handleBlockedSave);
       }
       setSuccessData({
-        title: `${is_component ? "Component" : "Flow"} shared successfully!`,
+        title: t("share.sharedSuccessfully", {
+          type: is_component ? t("deleteModal.component") : "Flow",
+        }),
       });
     }
 
     if (!update)
       saveFlowStore(
         flow!,
-        getTagsIds(selectedTags, cloneDeep(data) ?? []),
+        getTagsIds(selectedTags, cloneDeep(tags) ?? []),
         sharePublic,
       ).then(successShare, (err) => {
         setErrorData({
-          title: "Error sharing " + (is_component ? "component" : "flow"),
+          title:
+            t("errors.errorSharing") +
+            " " +
+            (is_component ? "component" : "flow"),
           list: [err["response"]["data"]["detail"]],
         });
       });
     else
       updateFlowStore(
         flow!,
-        getTagsIds(selectedTags, cloneDeep(data) ?? []),
+        getTagsIds(selectedTags, cloneDeep(tags) ?? []),
         sharePublic,
         unavaliableNames.find((e) => e.name === name)!.id,
       ).then(successShare, (err) => {
         setErrorData({
-          title: "Error sharing " + is_component ? "component" : "flow",
+          title:
+            t("errors.errorSharing") +
+            " " +
+            (is_component ? "component" : "flow"),
           list: [err["response"]["data"]["detail"]],
         });
       });
@@ -146,14 +158,14 @@ export default function ShareModal({
     downloadNode(component);
   };
 
-  let modalConfirmation = useMemo(() => {
+  const modalConfirmation = useMemo(() => {
     return (
       <>
         <ConfirmationModal
           open={openConfirmationModal}
-          title={`Replace`}
-          cancelText="Cancel"
-          confirmationText="Replace"
+          title={t("flow.replaceComponent")}
+          cancelText={t("modal.cancelButton")}
+          confirmationText={t("flow.replaceComponent")}
           size={"x-small"}
           icon={"SaveAll"}
           index={6}
@@ -166,13 +178,10 @@ export default function ShareModal({
           }}
         >
           <ConfirmationModal.Content>
-            <span>
-              It seems {name} already exists. Do you want to replace it with the
-              current?
-            </span>
+            <span>{t("share.replaceExisting", { name })}</span>
             <br></br>
             <span className="text-xs text-destructive">
-              Note: This action is irreversible.
+              {t("share.thisActionIrreversible")}
             </span>
           </ConfirmationModal.Content>
         </ConfirmationModal>
@@ -209,11 +218,13 @@ export default function ShareModal({
           {children ? children : <></>}
         </BaseModal.Trigger>
         <BaseModal.Header
-          description={`Publish ${
-            is_component ? "your component" : "workflow"
-          } to the Langflow Store.`}
+          description={t("share.publishDescription", {
+            type: is_component
+              ? t("shareModal.yourComponent")
+              : t("shareModal.workflow"),
+          })}
         >
-          <span className="pr-2">Share</span>
+          <span className="pr-2">{t("misc.share")}</span>
           <IconComponent
             name="Share3"
             className="-m-0.5 h-6 w-6 text-foreground"
@@ -221,40 +232,48 @@ export default function ShareModal({
           />
         </BaseModal.Header>
         <BaseModal.Content>
-          <div className="w-full rounded-lg border border-border p-4">
-            <EditFlowSettings name={name} description={description} />
-          </div>
-          <div className="mt-3 flex h-8 w-full">
-            <TagsSelector
-              tags={data ?? []}
-              loadingTags={isFetching}
-              disabled={false}
-              selectedTags={selectedTags}
-              setSelectedTags={setSelectedTags}
-            />
-          </div>
-          <div className="mb-2 mt-5 flex items-center space-x-2">
-            <Checkbox
-              id="public"
-              checked={sharePublic}
-              onCheckedChange={(event: boolean) => {
-                setSharePublic(event);
-              }}
-              data-testid="public-checkbox"
-            />
-            <label htmlFor="public" className="export-modal-save-api text-sm">
-              Set {nameComponent} status to public
-            </label>
-          </div>
-          <span className="text-xs text-destructive">
-            <b>Attention:</b> API keys in specified fields are automatically
-            removed upon sharing.
-          </span>
+          {open && (
+            <>
+              <div className="w-full rounded-lg border border-border p-4">
+                <EditFlowSettings name={name} description={description} />
+              </div>
+              <div className="mt-3 flex h-8 w-full">
+                <TagsSelector
+                  tags={tags ?? []}
+                  loadingTags={false}
+                  disabled={false}
+                  selectedTags={selectedTags}
+                  setSelectedTags={setSelectedTags}
+                />
+              </div>
+              <div className="mb-2 mt-5 flex items-center space-x-2">
+                <Checkbox
+                  id="public"
+                  checked={sharePublic}
+                  onCheckedChange={(event: boolean) => {
+                    setSharePublic(event);
+                  }}
+                  data-testid="public-checkbox"
+                />
+                <label
+                  htmlFor="public"
+                  className="export-modal-save-api text-sm"
+                >
+                  {t("share.setStatusPublic", { name: nameComponent })}
+                </label>
+              </div>
+              <span className="text-xs text-destructive">
+                <b>{t("modal.attention")}</b> {t("share.attentionApiKeys")}
+              </span>
+            </>
+          )}
         </BaseModal.Content>
 
         <BaseModal.Footer
           submit={{
-            label: `Share ${is_component ? "Component" : "Flow"}`,
+            label: is_component
+              ? t("share.shareComponent")
+              : t("share.shareFlow"),
             loading: loadingNames,
             dataTestId: "share-modal-button-flow",
           }}
@@ -271,7 +290,7 @@ export default function ShareModal({
                   }}
                 >
                   <IconComponent name="Download" className="h-4 w-4" />
-                  Export
+                  {t("misc.export")}
                 </Button>
               </ExportModal>
             )}
@@ -286,7 +305,7 @@ export default function ShareModal({
                 }}
               >
                 <IconComponent name="Download" className="h-4 w-4" />
-                Export
+                {t("misc.export")}
               </Button>
             )}
           </>

@@ -1,117 +1,61 @@
-import { expect, test } from "@playwright/test";
-import uaParser from "ua-parser-js";
+import { expect, test } from "../../fixtures";
+import { adjustScreenView } from "../../utils/adjust-screen-view";
 
-test("should be able to select all with ctrl + A on advanced modal", async ({
-  page,
-}) => {
-  await page.goto("/");
+import { openBlankFlow } from "../../utils/flow/open-blank-flow";
 
-  let modalCount = 0;
+// TODO: This test might not be needed anymore
+test(
+  "should be able to select all with ctrl + A on a node input",
+  { tag: ["@release"] },
+  async ({ page }) => {
+    await openBlankFlow(page);
 
-  try {
-    const modalTitleElement = await page?.getByTestId("modal-title");
-    if (modalTitleElement) {
-      modalCount = await modalTitleElement.count();
-    }
-  } catch (error) {
-    modalCount = 0;
-  }
+    await page.waitForSelector('[data-testid="canvas_controls_dropdown"]', {
+      timeout: 3000,
+      state: "visible",
+    });
 
-  while (modalCount === 0) {
-    await page.getByText("New Project", { exact: true }).click();
-    await page.waitForTimeout(3000);
-    modalCount = await page.getByTestId("modal-title")?.count();
-  }
+    await page.getByTestId("sidebar-search-input").click();
+    await page.getByTestId("sidebar-search-input").fill("url");
+    await page.waitForSelector('[data-testid="data_sourceURL"]', {
+      timeout: 3000,
+    });
 
-  await page.waitForSelector('[data-testid="blank-flow"]', {
-    timeout: 30000,
-  });
+    await page
+      .getByTestId("data_sourceURL")
+      .hover()
+      .then(async () => {
+        await page.getByTestId("add-component-button-url").click();
+      });
+    await adjustScreenView(page, { numberOfZoomOut: 3 });
 
-  await page.getByTestId("blank-flow").click();
-  await page.waitForSelector('[data-testid="extended-disclosure"]', {
-    timeout: 30000,
-  });
+    await page.waitForSelector('[data-testid="div-generic-node"]', {
+      timeout: 5000,
+      state: "visible",
+    });
 
-  await page.getByTestId("extended-disclosure").click();
-  await page.getByPlaceholder("Search").click();
-  await page.getByPlaceholder("Search").fill("ollama");
-  await page.waitForTimeout(1000);
+    await page.getByTestId("div-generic-node").click();
 
-  await page
-    .getByTestId("embeddingsOllama Embeddings")
-    .dragTo(page.locator('//*[@id="react-flow-id"]'));
+    // LE-1810: the advanced modal is gone; list inputs stay on the node.
+    const urlInput = page.getByTestId("inputlist_str_urls_0");
+    await expect(urlInput).toBeVisible({ timeout: 5000 });
 
-  await page.getByTitle("fit view").click();
-  await page.getByTitle("zoom out").click();
-  await page.getByTitle("zoom out").click();
+    // Fill the first input.
+    await urlInput.fill("url_test_ctrl_a_first_input");
+    let value = await urlInput.inputValue();
+    expect(value).toBe("url_test_ctrl_a_first_input");
 
-  const getUA = await page.evaluate(() => navigator.userAgent);
-  const userAgentInfo = uaParser(getUA);
-  let control = "Control";
+    await page.keyboard.press("ControlOrMeta+a");
 
-  if (userAgentInfo.os.name.includes("Mac")) {
-    control = "Meta";
-  }
+    await page.keyboard.press("ControlOrMeta+c");
 
-  await page.getByTestId("div-generic-node").click();
+    await page.keyboard.press("Backspace");
+    value = await urlInput.inputValue();
+    expect(value).toBe("");
 
-  await page.keyboard.press(`${control}+Shift+A`);
+    await page.keyboard.press("ControlOrMeta+v");
 
-  await page.waitForTimeout(1000);
-
-  await page
-    .getByPlaceholder("Type something...")
-    .nth(2)
-    .fill("ollama_test_ctrl_a_first_input");
-  let value = await page
-    .getByPlaceholder("Type something...")
-    .nth(2)
-    .inputValue();
-  expect(value).toBe("ollama_test_ctrl_a_first_input");
-
-  await page
-    .getByPlaceholder("Type something...")
-    .last()
-    .fill("ollama_test_ctrl_a_second_input");
-  let secondValue = await page
-    .getByPlaceholder("Type something...")
-    .last()
-    .inputValue();
-  expect(secondValue).toBe("ollama_test_ctrl_a_second_input");
-
-  await page.getByPlaceholder("Type something...").last().click();
-  await page.waitForTimeout(1000);
-
-  await page.keyboard.down(control);
-  await page.waitForTimeout(200);
-  await page.keyboard.press("a");
-  await page.keyboard.up(control);
-
-  await page.waitForTimeout(1000);
-
-  await page.keyboard.down(control);
-  await page.waitForTimeout(200);
-  await page.keyboard.press("c");
-  await page.keyboard.up(control);
-
-  await page.waitForTimeout(1000);
-
-  await page.getByPlaceholder("Type something...").nth(2).click();
-
-  await page.waitForTimeout(1000);
-
-  await page.keyboard.down(control);
-  await page.waitForTimeout(200);
-  await page.keyboard.press("a");
-  await page.keyboard.up(control);
-
-  await page.waitForTimeout(1000);
-
-  await page.keyboard.down(control);
-  await page.waitForTimeout(200);
-  await page.keyboard.press("v");
-  await page.keyboard.up(control);
-
-  value = await page.getByPlaceholder("Type something...").nth(2).inputValue();
-  expect(value).toBe("ollama_test_ctrl_a_second_input");
-});
+    value = await urlInput.inputValue();
+    expect(value).toBe("url_test_ctrl_a_first_input");
+  },
+);

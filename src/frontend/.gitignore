@@ -11,6 +11,10 @@
 # production
 /build
 
+# storybook
+/storybook-static
+*storybook.log
+
 # misc
 .DS_Store
 .env.local
@@ -32,3 +36,4 @@ yarn-error.log*
 /playwright-report/
 /blob-report/
 /playwright/.cache/
+.qodo

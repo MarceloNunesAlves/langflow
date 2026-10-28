@@ -1,45 +1,28 @@
-from typing import TYPE_CHECKING, Any, Callable, Coroutine
+from __future__ import annotations
 
-from loguru import logger
+import asyncio
+from collections.abc import Callable, Coroutine
+from typing import TYPE_CHECKING, Any
+from uuid import UUID, uuid4
 
+from langflow.exceptions.api import WorkflowResourceError, WorkflowServiceUnavailableError
 from langflow.services.base import Service
+from langflow.services.deps import get_queue_service
 from langflow.services.task.backends.anyio import AnyIOBackend
-from langflow.services.task.backends.base import TaskBackend
-from langflow.services.task.utils import get_celery_worker_status
+from langflow.services.task.backends.celery import CeleryBackend
 
 if TYPE_CHECKING:
-    from langflow.services.settings.service import SettingsService
+    from lfx.services.settings.service import SettingsService
 
-
-def check_celery_availability():
-    try:
-        from langflow.worker import celery_app
-
-        status = get_celery_worker_status(celery_app)
-        logger.debug(f"Celery status: {status}")
-    except Exception as exc:
-        logger.debug(f"Celery not available: {exc}")
-        status = {"availability": None}
-    return status
+    from langflow.services.task.backends.base import TaskBackend
 
 
 class TaskService(Service):
     name = "task_service"
 
-    def __init__(self, settings_service: "SettingsService"):
+    def __init__(self, settings_service: SettingsService):
         self.settings_service = settings_service
-        try:
-            if self.settings_service.settings.celery_enabled:
-                USE_CELERY = True
-                status = check_celery_availability()
-
-                USE_CELERY = status.get("availability") is not None
-            else:
-                USE_CELERY = False
-        except ImportError:
-            USE_CELERY = False
-
-        self.use_celery = USE_CELERY
+        self.use_celery = self.settings_service.settings.celery_enabled
         self.backend = self.get_backend()
 
     @property
@@ -48,12 +31,51 @@ class TaskService(Service):
 
     def get_backend(self) -> TaskBackend:
         if self.use_celery:
-            from langflow.services.task.backends.celery import CeleryBackend
-
-            logger.debug("Using Celery backend")
             return CeleryBackend()
-        logger.debug("Using AnyIO backend")
         return AnyIOBackend()
+
+    async def fire_and_forget_task(self, task_func: Callable[..., Any], *args: Any, **kwargs: Any) -> str:
+        """Launch a task in the background and forget about it.
+
+        Note: This is required since the local AnyIOBackend does not support background tasks
+        natively in a non-blocking way for the API.
+
+        This method abstracts the background execution. If Celery is enabled,
+        it uses the distributed queue. Otherwise, it uses the JobQueueService
+        to manage and track the asynchronous task locally.
+
+        Args:
+            task_func: The task function to launch.
+            *args: Positional arguments for the task function.
+            **kwargs: Keyword arguments for the task function.
+
+        Returns:
+            str: A task_id that can be used to track or cancel the task via JobQueueService.
+        """
+        if self.use_celery:
+            task_id, _ = self.backend.launch_task(task_func, *args, **kwargs)
+            return task_id
+
+        graph = kwargs.get("graph")
+        task_id = graph.run_id if graph and hasattr(graph, "run_id") else str(uuid4())
+        # Create a job queue for the task and track the job execution using the
+        # JobQueueService
+        job_queue_service = get_queue_service()
+        try:
+            job_queue_service.create_queue(task_id)
+            job_queue_service.start_job(task_id, task_func(*args, **kwargs))
+        except (RuntimeError, ValueError) as e:
+            await job_queue_service.cleanup_job(task_id)
+            msg = f"Local task queue error: {e!s}"
+            raise WorkflowServiceUnavailableError(msg) from e
+        except MemoryError as e:
+            await job_queue_service.cleanup_job(task_id)
+            msg = f"Memory exhaustion during local task creation: {e!s}"
+            raise WorkflowResourceError(msg) from e
+        except Exception:
+            await job_queue_service.cleanup_job(task_id)
+            raise
+        return task_id
 
     # In your TaskService class
     async def launch_and_await_task(
@@ -62,23 +84,23 @@ class TaskService(Service):
         *args: Any,
         **kwargs: Any,
     ) -> Any:
-        if not self.use_celery:
-            return None, await task_func(*args, **kwargs)
-        if not hasattr(task_func, "apply"):
-            raise ValueError(f"Task function {task_func} does not have an apply method")
-        task = task_func.apply(args=args, kwargs=kwargs)
-
-        result = task.get()
-        # if result is coroutine
-        if isinstance(result, Coroutine):
-            result = await result
-        return task.id, result
+        return await task_func(*args, **kwargs)
 
     async def launch_task(self, task_func: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
-        logger.debug(f"Launching task {task_func} with args {args} and kwargs {kwargs}")
-        logger.debug(f"Using backend {self.backend}")
         task = self.backend.launch_task(task_func, *args, **kwargs)
         return await task if isinstance(task, Coroutine) else task
 
-    def get_task(self, task_id: str) -> Any:
-        return self.backend.get_task(task_id)
+    async def revoke_task(self, task_id: UUID | str) -> bool:
+        if self.use_celery:
+            # CeleryBackend.revoke_task is synchronous and publishes to the
+            # broker, so run it off the event loop instead of awaiting it.
+            return await asyncio.to_thread(self.backend.revoke_task, str(task_id))
+
+        job_queue_service = get_queue_service()
+        try:
+            await job_queue_service.cleanup_job(str(task_id))
+        except asyncio.CancelledError as e:
+            if str(e) != "LANGFLOW_USER_CANCELLED":
+                raise
+            return True
+        return True

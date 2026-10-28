@@ -1,16 +1,45 @@
 import { create } from "zustand";
-import { getAll } from "../controllers/API";
-import { APIDataType } from "../types/api";
-import { TypesStoreType } from "../types/zustand/types";
+import type { APIDataType, ComponentDisplayNamesType } from "../types/api";
+import type { TypesStoreType } from "../types/zustand/types";
 import {
-  extractFieldsFromComponenents,
+  extractSecretFieldsFromComponents,
   templatesGenerator,
   typesGenerator,
 } from "../utils/reactflowUtils";
-import useAlertStore from "./alertStore";
-import useFlowsManagerStore from "./flowsManagerStore";
+
+const emptyPaletteState = () => ({
+  types: {},
+  templates: {},
+  data: {},
+  ComponentFields: new Set<string>(),
+  componentDisplayNames: {} as ComponentDisplayNamesType,
+});
 
 export const useTypesStore = create<TypesStoreType>((set, get) => ({
+  activeScopeKey: null,
+  activateScope: (scopeKey) => {
+    if (get().activeScopeKey === scopeKey) return;
+    set({
+      activeScopeKey: scopeKey,
+      ...emptyPaletteState(),
+    });
+  },
+  clearScopedTypes: (scopeKey) => {
+    if (get().activeScopeKey !== scopeKey) return false;
+    set(emptyPaletteState());
+    return true;
+  },
+  setScopedTypes: (scopeKey, data, componentDisplayNames) => {
+    if (get().activeScopeKey !== scopeKey) return false;
+    set({
+      types: typesGenerator(data),
+      data,
+      ComponentFields: extractSecretFieldsFromComponents(data),
+      templates: templatesGenerator(data),
+      componentDisplayNames,
+    });
+    return true;
+  },
   ComponentFields: new Set(),
   setComponentFields: (fields) => {
     set({ ComponentFields: fields });
@@ -21,40 +50,25 @@ export const useTypesStore = create<TypesStoreType>((set, get) => ({
   types: {},
   templates: {},
   data: {},
-  getTypes: (force_refresh: boolean = true) => {
-    return new Promise<void>(async (resolve, reject) => {
-      const setLoading = useFlowsManagerStore.getState().setIsLoading;
-      getAll(force_refresh)
-        .then((response) => {
-          const data = response?.data;
-          set((old) => ({
-            types: typesGenerator(data),
-            data: { ...old.data, ...data },
-            ComponentFields: extractFieldsFromComponenents({
-              ...old.data,
-              ...data,
-            }),
-            templates: templatesGenerator(data),
-          }));
-          resolve();
-        })
-        .catch((error) => {
-          console.error("An error has occurred while fetching types.");
-          console.log(error);
-          setLoading(false);
-          reject();
-        });
+  setTypes: (data: APIDataType) => {
+    set({
+      types: typesGenerator(data),
+      data,
+      ComponentFields: extractSecretFieldsFromComponents(data),
+      templates: templatesGenerator(data),
     });
-  },
-  setTypes: (newState: {}) => {
-    set({ types: newState });
   },
   setTemplates: (newState: {}) => {
     set({ templates: newState });
   },
   setData: (change: APIDataType | ((old: APIDataType) => APIDataType)) => {
-    let newChange = typeof change === "function" ? change(get().data) : change;
+    const newChange =
+      typeof change === "function" ? change(get().data) : change;
     set({ data: newChange });
-    get().setComponentFields(extractFieldsFromComponenents(newChange));
+    get().setComponentFields(extractSecretFieldsFromComponents(newChange));
+  },
+  componentDisplayNames: {} as ComponentDisplayNamesType,
+  setComponentDisplayNames: (data: ComponentDisplayNamesType) => {
+    set({ componentDisplayNames: data });
   },
 }));

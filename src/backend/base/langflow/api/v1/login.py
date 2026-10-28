@@ -1,48 +1,75 @@
+from __future__ import annotations
+
+from typing import Annotated
+
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.security import OAuth2PasswordRequestForm
-from langflow.services.database.models.user.crud import get_user_by_id
-from sqlmodel import Session
+from pydantic import BaseModel
 
+from langflow.api.utils import DbSession
 from langflow.api.v1.schemas import Token
-from langflow.services.auth.utils import (
-    authenticate_user,
-    create_refresh_token,
-    create_user_longterm_token,
-    create_user_tokens,
-)
-from langflow.services.database.models.folder.utils import create_default_folder_if_it_doesnt_exist
-from langflow.services.deps import get_session, get_settings_service, get_variable_service
-from langflow.services.settings.service import SettingsService
-from langflow.services.variable.service import VariableService
+from langflow.initial_setup.setup import get_or_create_default_folder
+from langflow.services.auth.cookies import auth_cookie_name
+from langflow.services.auth.exceptions import AuthenticationError
+from langflow.services.database.models.user.crud import get_user_by_id
+from langflow.services.database.models.user.model import UserRead
+from langflow.services.deps import get_auth_service, get_settings_service, get_variable_service
+from langflow.services.rate_limit import check_rate_limit
 
 router = APIRouter(tags=["Login"])
 
 
-@router.post("/login", response_model=Token)
+def _cookie_path(request: Request) -> str:
+    """Match the frontend base configured at startup, independent of forwarded headers."""
+    return f"{request.app.root_path.strip().rstrip('/')}/"
+
+
+def get_limiter_from_app(request: Request):
+    """Get the rate limiter from app state (initialized after settings load)."""
+    return request.app.state.limiter
+
+
+class SessionResponse(BaseModel):
+    """Session validation response."""
+
+    authenticated: bool
+    user: UserRead | None = None
+    store_api_key: str | None = None
+
+
+@router.post("/login", response_model=Token, include_in_schema=False)
 async def login_to_get_access_token(
+    request: Request,
     response: Response,
-    form_data: OAuth2PasswordRequestForm = Depends(),
-    db: Session = Depends(get_session),
-    # _: Session = Depends(get_current_active_user)
-    settings_service=Depends(get_settings_service),
-    variable_service: VariableService = Depends(get_variable_service),
+    form_data: Annotated[OAuth2PasswordRequestForm, Depends()],
+    db: DbSession,
 ):
-    auth_settings = settings_service.auth_settings
+    """Login endpoint with rate limiting applied via app.state.limiter."""
+    # Check rate limit (limiter is initialized in main.py after settings load)
+    check_rate_limit(request)
+
+    auth_settings = get_settings_service().auth_settings
     try:
-        user = authenticate_user(form_data.username, form_data.password, db)
+        auth = get_auth_service()
+        user = await auth.authenticate_user(form_data.username, form_data.password, db, request)
     except Exception as exc:
         if isinstance(exc, HTTPException):
-            raise exc
+            raise
+        # Log the actual error server-side but don't expose it to clients
+        from loguru import logger
+
+        logger.error(f"Authentication error: {exc}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(exc),
+            detail="An error occurred during authentication",
         ) from exc
 
     if user:
-        tokens = create_user_tokens(user_id=user.id, db=db, update_last_login=True)
+        tokens = await auth.create_user_tokens(user_id=user.id, db=db, update_last_login=True)
         response.set_cookie(
-            "refresh_token_lf",
+            auth_cookie_name("refresh_token_lf", request),
             tokens["refresh_token"],
+            path=_cookie_path(request),
             httponly=auth_settings.REFRESH_HTTPONLY,
             samesite=auth_settings.REFRESH_SAME_SITE,
             secure=auth_settings.REFRESH_SECURE,
@@ -50,8 +77,9 @@ async def login_to_get_access_token(
             domain=auth_settings.COOKIE_DOMAIN,
         )
         response.set_cookie(
-            "access_token_lf",
+            auth_cookie_name("access_token_lf", request),
             tokens["access_token"],
+            path=_cookie_path(request),
             httponly=auth_settings.ACCESS_HTTPONLY,
             samesite=auth_settings.ACCESS_SAME_SITE,
             secure=auth_settings.ACCESS_SECURE,
@@ -59,37 +87,58 @@ async def login_to_get_access_token(
             domain=auth_settings.COOKIE_DOMAIN,
         )
         response.set_cookie(
-            "apikey_tkn_lflw",
+            auth_cookie_name("apikey_tkn_lflw", request),
             str(user.store_api_key),
+            path=_cookie_path(request),
             httponly=auth_settings.ACCESS_HTTPONLY,
             samesite=auth_settings.ACCESS_SAME_SITE,
             secure=auth_settings.ACCESS_SECURE,
             expires=None,  # Set to None to make it a session cookie
             domain=auth_settings.COOKIE_DOMAIN,
         )
-        variable_service.initialize_user_variables(user.id, db)
-        # Create default folder for user if it doesn't exist
-        create_default_folder_if_it_doesnt_exist(db, user.id)
+        await get_variable_service().initialize_user_variables(user.id, db)
+        # Initialize agentic variables if agentic experience is enabled
+        from langflow.api.utils.mcp.agentic_mcp import initialize_agentic_user_variables
+
+        # Create default project for user if it doesn't exist
+        _ = await get_or_create_default_folder(db, user.id)
+
+        if get_settings_service().settings.agentic_experience:
+            await initialize_agentic_user_variables(user.id, db)
+
         return tokens
-    else:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect username or password",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Incorrect username or password",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
 
 
-@router.get("/auto_login")
-async def auto_login(
-    response: Response, db: Session = Depends(get_session), settings_service=Depends(get_settings_service)
-):
-    auth_settings = settings_service.auth_settings
+@router.get("/auto_login", include_in_schema=False)
+async def auto_login(request: Request, response: Response, db: DbSession):
+    auth_settings = get_settings_service().auth_settings
 
-    if settings_service.auth_settings.AUTO_LOGIN:
-        user_id, tokens = create_user_longterm_token(db)
+    if auth_settings.AUTO_LOGIN:
+        auth = get_auth_service()
+        user_id, tokens = await auth.create_user_longterm_token(db)
+        # The auto-login token is now short-lived, so set the refresh
+        # cookie too — the client refreshes it transparently via /refresh instead
+        # of relying on a year-long token.
+        if tokens.get("refresh_token"):
+            response.set_cookie(
+                auth_cookie_name("refresh_token_lf", request),
+                tokens["refresh_token"],
+                path=_cookie_path(request),
+                httponly=auth_settings.REFRESH_HTTPONLY,
+                samesite=auth_settings.REFRESH_SAME_SITE,
+                secure=auth_settings.REFRESH_SECURE,
+                expires=auth_settings.REFRESH_TOKEN_EXPIRE_SECONDS,
+                domain=auth_settings.COOKIE_DOMAIN,
+            )
         response.set_cookie(
-            "access_token_lf",
+            auth_cookie_name("access_token_lf", request),
             tokens["access_token"],
+            path=_cookie_path(request),
             httponly=auth_settings.ACCESS_HTTPONLY,
             samesite=auth_settings.ACCESS_SAME_SITE,
             secure=auth_settings.ACCESS_SECURE,
@@ -97,15 +146,16 @@ async def auto_login(
             domain=auth_settings.COOKIE_DOMAIN,
         )
 
-        user = get_user_by_id(db, user_id)
+        user = await get_user_by_id(db, user_id)
 
         if user:
             if user.store_api_key is None:
                 user.store_api_key = ""
 
             response.set_cookie(
-                "apikey_tkn_lflw",
+                auth_cookie_name("apikey_tkn_lflw", request),
                 str(user.store_api_key),  # Ensure it's a string
+                path=_cookie_path(request),
                 httponly=auth_settings.ACCESS_HTTPONLY,
                 samesite=auth_settings.ACCESS_SAME_SITE,
                 secure=auth_settings.ACCESS_SECURE,
@@ -113,33 +163,39 @@ async def auto_login(
                 domain=auth_settings.COOKIE_DOMAIN,
             )
 
+            if get_settings_service().settings.agentic_experience:
+                from langflow.api.utils.mcp.agentic_mcp import initialize_agentic_user_variables
+
+                await initialize_agentic_user_variables(user.id, db)
+
         return tokens
 
     raise HTTPException(
-        status_code=status.HTTP_400_BAD_REQUEST,
+        status_code=status.HTTP_403_FORBIDDEN,
         detail={
-            "message": "Auto login is disabled. Please enable it in the settings",
+            "message": "Auto login is disabled.",
             "auto_login": False,
         },
     )
 
 
-@router.post("/refresh")
+@router.post("/refresh", include_in_schema=False)
 async def refresh_token(
     request: Request,
     response: Response,
-    settings_service: "SettingsService" = Depends(get_settings_service),
-    db: Session = Depends(get_session),
+    db: DbSession,
 ):
-    auth_settings = settings_service.auth_settings
+    auth_settings = get_settings_service().auth_settings
 
-    token = request.cookies.get("refresh_token_lf")
+    token = request.cookies.get(auth_cookie_name("refresh_token_lf", request))
 
     if token:
-        tokens = create_refresh_token(token, db)
+        auth = get_auth_service()
+        tokens = await auth.create_refresh_token(token, db)
         response.set_cookie(
-            "refresh_token_lf",
+            auth_cookie_name("refresh_token_lf", request),
             tokens["refresh_token"],
+            path=_cookie_path(request),
             httponly=auth_settings.REFRESH_HTTPONLY,
             samesite=auth_settings.REFRESH_SAME_SITE,
             secure=auth_settings.REFRESH_SECURE,
@@ -147,8 +203,9 @@ async def refresh_token(
             domain=auth_settings.COOKIE_DOMAIN,
         )
         response.set_cookie(
-            "access_token_lf",
+            auth_cookie_name("access_token_lf", request),
             tokens["access_token"],
+            path=_cookie_path(request),
             httponly=auth_settings.ACCESS_HTTPONLY,
             samesite=auth_settings.ACCESS_SAME_SITE,
             secure=auth_settings.ACCESS_SECURE,
@@ -156,17 +213,78 @@ async def refresh_token(
             domain=auth_settings.COOKIE_DOMAIN,
         )
         return tokens
-    else:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid refresh token",
-            headers={"WWW-Authenticate": "Bearer"},
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Invalid refresh token",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+
+@router.get("/session", include_in_schema=False)
+async def get_session(
+    request: Request,
+    db: DbSession,
+) -> SessionResponse:
+    """Validate session and return user information.
+
+    This endpoint checks if the user is authenticated via cookie or Authorization header.
+    It does not raise an error if unauthenticated, allowing the frontend to gracefully
+    handle the session state.
+    """
+    from langflow.services.auth.utils import _get_external_token, oauth2_login
+
+    # Try to get the token from the request (cookie or Authorization header)
+    try:
+        token = await oauth2_login(request)
+        # Extract the external credential separately so a present-but-invalid
+        # native cookie can't shadow a valid external one (mirrors get_current_user
+        # and the WS/SSE paths). oauth2_login may already have collapsed to the
+        # external credential, in which case the service's dedup guard makes the
+        # fallback a no-op.
+        external_token = _get_external_token(request.headers, request.cookies)
+        if not token and not external_token:
+            return SessionResponse(authenticated=False)
+
+        # Validate the token and get user
+        user = await get_auth_service().get_current_user_from_access_token(token, db, external_token=external_token)
+        if not user or not user.is_active:
+            return SessionResponse(authenticated=False)
+
+        return SessionResponse(
+            authenticated=True,
+            user=UserRead.model_validate(user, from_attributes=True),
         )
+    except (AuthenticationError, HTTPException, ValueError) as _:
+        # Any authentication error means not authenticated
+        return SessionResponse(authenticated=False)
 
 
-@router.post("/logout")
-async def logout(response: Response):
-    response.delete_cookie("refresh_token_lf")
-    response.delete_cookie("access_token_lf")
-    response.delete_cookie("apikey_tkn_lflw")
+@router.post("/logout", include_in_schema=False)
+async def logout(request: Request, response: Response):
+    auth_settings = get_settings_service().auth_settings
+
+    response.delete_cookie(
+        auth_cookie_name("refresh_token_lf", request),
+        path=_cookie_path(request),
+        httponly=auth_settings.REFRESH_HTTPONLY,
+        samesite=auth_settings.REFRESH_SAME_SITE,
+        secure=auth_settings.REFRESH_SECURE,
+        domain=auth_settings.COOKIE_DOMAIN,
+    )
+    response.delete_cookie(
+        auth_cookie_name("access_token_lf", request),
+        path=_cookie_path(request),
+        httponly=auth_settings.ACCESS_HTTPONLY,
+        samesite=auth_settings.ACCESS_SAME_SITE,
+        secure=auth_settings.ACCESS_SECURE,
+        domain=auth_settings.COOKIE_DOMAIN,
+    )
+    response.delete_cookie(
+        auth_cookie_name("apikey_tkn_lflw", request),
+        path=_cookie_path(request),
+        httponly=auth_settings.ACCESS_HTTPONLY,
+        samesite=auth_settings.ACCESS_SAME_SITE,
+        secure=auth_settings.ACCESS_SECURE,
+        domain=auth_settings.COOKIE_DOMAIN,
+    )
     return {"message": "Logout successful"}

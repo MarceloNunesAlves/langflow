@@ -1,15 +1,18 @@
+import operator
 from collections import deque
+from typing import TYPE_CHECKING
 
 import pytest
+from lfx.components.helpers.memory import MemoryComponent
+from lfx.components.input_output import ChatInput, ChatOutput
+from lfx.components.models import LanguageModelComponent
+from lfx.components.models_and_agents import PromptComponent
+from lfx.components.processing.converter import TypeConverterComponent
+from lfx.graph.graph.base import Graph
+from lfx.graph.graph.constants import Finish
 
-from langflow.components.helpers.Memory import MemoryComponent
-from langflow.components.inputs.ChatInput import ChatInput
-from langflow.components.models.OpenAIModel import OpenAIModelComponent
-from langflow.components.outputs.ChatOutput import ChatOutput
-from langflow.components.prompts.Prompt import PromptComponent
-from langflow.graph import Graph
-from langflow.graph.graph.constants import Finish
-from langflow.graph.graph.schema import GraphDump
+if TYPE_CHECKING:
+    from lfx.graph.graph.schema import GraphDump
 
 
 @pytest.fixture
@@ -22,35 +25,50 @@ AI: """
     memory_component = MemoryComponent(_id="chat_memory")
     memory_component.set(session_id=session_id)
     chat_input = ChatInput(_id="chat_input")
+    type_converter = TypeConverterComponent(_id="type_converter")
+    type_converter.set(input_data=memory_component.retrieve_messages_dataframe)
     prompt_component = PromptComponent(_id="prompt")
     prompt_component.set(
-        template=template, user_message=chat_input.message_response, context=memory_component.retrieve_messages_as_text
+        template=template,
+        user_message=chat_input.message_response,
+        context=type_converter.convert_to_message,
     )
-    openai_component = OpenAIModelComponent(_id="openai")
-    openai_component.set(
+    language_model_component = LanguageModelComponent(_id="language_model")
+    language_model_component.set(
         input_value=prompt_component.build_prompt, max_tokens=100, temperature=0.1, api_key="test_api_key"
     )
-    openai_component.set_on_output(name="text_output", value="Mock response", cache=True)
+    language_model_component.set_on_output(name="text_output", value="Mock response", cache=True)
 
     chat_output = ChatOutput(_id="chat_output")
-    chat_output.set(input_value=openai_component.text_response)
+    chat_output.set(input_value=language_model_component.text_response)
 
     graph = Graph(chat_input, chat_output)
-    assert graph.in_degree_map == {"chat_output": 1, "prompt": 2, "openai": 1, "chat_input": 0, "chat_memory": 0}
-    return graph
-
-
-def test_memory_chatbot(memory_chatbot_graph):
-    # Now we run step by step
-    expected_order = deque(["chat_input", "chat_memory", "prompt", "openai", "chat_output"])
-    assert memory_chatbot_graph.in_degree_map == {
+    language_model_vertex = graph.get_vertex("language_model")
+    assert language_model_vertex.data["node"]["template"]["api_key"]["load_from_db"] is False
+    assert graph.in_degree_map == {
         "chat_output": 1,
+        "type_converter": 1,
         "prompt": 2,
-        "openai": 1,
+        "language_model": 1,
         "chat_input": 0,
         "chat_memory": 0,
     }
-    assert memory_chatbot_graph.vertices_layers == [["prompt"], ["openai"], ["chat_output"]]
+    return graph
+
+
+@pytest.mark.usefixtures("client")
+def test_memory_chatbot(memory_chatbot_graph):
+    # Now we run step by step
+    expected_order = deque(["chat_input", "chat_memory", "type_converter", "prompt", "language_model", "chat_output"])
+    assert memory_chatbot_graph.in_degree_map == {
+        "chat_output": 1,
+        "type_converter": 1,
+        "prompt": 2,
+        "language_model": 1,
+        "chat_input": 0,
+        "chat_memory": 0,
+    }
+    assert memory_chatbot_graph.vertices_layers == [["type_converter"], ["prompt"], ["language_model"], ["chat_output"]]
     assert memory_chatbot_graph.first_layer == ["chat_input", "chat_memory"]
 
     for step in expected_order:
@@ -83,8 +101,8 @@ def test_memory_chatbot_dump_structure(memory_chatbot_graph: Graph):
     description = graph_dict["description"]
     endpoint_name = graph_dict["endpoint_name"]
 
-    assert len(nodes) == 5
-    assert len(edges) == 4
+    assert len(nodes) == 6
+    assert len(edges) == 5
     assert description is not None
     assert endpoint_name is not None
 
@@ -100,7 +118,7 @@ def test_memory_chatbot_dump_components_and_edges(memory_chatbot_graph: Graph):
     edges = data_dict["edges"]
 
     # sort the nodes by id
-    nodes = sorted(nodes, key=lambda x: x["id"])
+    nodes = sorted(nodes, key=operator.itemgetter("id"))
 
     # Check each node
     assert nodes[0]["data"]["type"] == "ChatInput"
@@ -112,18 +130,19 @@ def test_memory_chatbot_dump_components_and_edges(memory_chatbot_graph: Graph):
     assert nodes[2]["data"]["type"] == "ChatOutput"
     assert nodes[2]["id"] == "chat_output"
 
-    assert nodes[3]["data"]["type"] == "OpenAIModel"
-    assert nodes[3]["id"] == "openai"
+    assert nodes[3]["data"]["type"] == "LanguageModelComponent"
+    assert nodes[3]["id"] == "language_model"
 
-    assert nodes[4]["data"]["type"] == "Prompt"
+    assert nodes[4]["data"]["type"] == "Prompt Template"
     assert nodes[4]["id"] == "prompt"
 
     # Check edges
     expected_edges = [
         ("chat_input", "prompt"),
-        ("chat_memory", "prompt"),
-        ("prompt", "openai"),
-        ("openai", "chat_output"),
+        ("chat_memory", "type_converter"),
+        ("type_converter", "prompt"),
+        ("prompt", "language_model"),
+        ("language_model", "chat_output"),
     ]
 
     assert len(edges) == len(expected_edges)

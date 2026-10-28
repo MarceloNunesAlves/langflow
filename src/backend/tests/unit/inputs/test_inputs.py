@@ -1,7 +1,5 @@
 import pytest
-from pydantic import ValidationError
-
-from langflow.inputs.inputs import (
+from lfx.inputs.inputs import (
     BoolInput,
     CodeInput,
     DataInput,
@@ -19,21 +17,24 @@ from langflow.inputs.inputs import (
     NestedDictInput,
     PromptInput,
     SecretStrInput,
+    SliderInput,
     StrInput,
+    TabInput,
     TableInput,
     instantiate_input,
 )
-from langflow.schema.message import Message
-
-
-@pytest.fixture
-def client():
-    pass
+from lfx.schema.message import Message
+from pydantic import ValidationError
 
 
 def test_table_input_valid():
     data = TableInput(name="valid_table", value=[{"key": "value"}, {"key2": "value2"}])
     assert data.value == [{"key": "value"}, {"key2": "value2"}]
+
+
+def test_slider_input_valid():
+    data = SliderInput(name="valid_slider", value=10)
+    assert data.value == 10
 
 
 def test_table_input_invalid():
@@ -50,7 +51,7 @@ def test_str_input_valid():
 
 
 def test_str_input_invalid():
-    with pytest.warns(UserWarning):
+    with pytest.warns(UserWarning, match="Invalid value type.*for input"):
         StrInput(name="invalid_str", value=1234)
 
 
@@ -76,7 +77,7 @@ def test_instantiate_input_valid():
 
 
 def test_instantiate_input_invalid():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="Invalid input type: InvalidInput"):
         instantiate_input("InvalidInput", {"name": "invalid_input", "value": "This is a string"})
 
 
@@ -168,6 +169,19 @@ def test_bool_input_invalid():
         BoolInput(name="invalid_bool", value="not_a_bool")
 
 
+def test_bool_input_accepts_message():
+    """Regression test for #9424.
+
+    BoolInput must coerce Message values so that MCP-tool boolean fields can be
+    wired from Message-producing components.
+    """
+    bool_input = BoolInput(name="bool_from_message", value=Message(text="true"))
+    assert bool_input.value is True
+
+    bool_input_false = BoolInput(name="bool_from_message_false", value=Message(text="false"))
+    assert bool_input_false.value is False
+
+
 def test_nested_dict_input_valid():
     nested_dict_input = NestedDictInput(name="valid_nested_dict", value={"key": "value"})
     assert nested_dict_input.value == {"key": "value"}
@@ -186,6 +200,16 @@ def test_dict_input_valid():
 def test_dict_input_invalid():
     with pytest.raises(ValidationError):
         DictInput(name="invalid_dict", value="not_a_dict")
+
+
+def test_dict_input_accepts_json_message():
+    """Regression test for #9424.
+
+    DictInput must accept Message/JSON-string payloads so MCP-tool dict/JSON
+    fields can be wired from upstream components.
+    """
+    dict_input = DictInput(name="dict_from_message", value=Message(text='{"k": "v"}'))
+    assert dict_input.value == {"k": "v"}
 
 
 def test_dropdown_input_valid():
@@ -213,6 +237,81 @@ def test_file_input_valid():
     assert file_input.value == ["/path/to/file"]
 
 
+@pytest.mark.parametrize(
+    ("test_id", "options", "value", "expected_options", "expected_value"),
+    [
+        (
+            "standard_valid",
+            ["Tab1", "Tab2", "Tab3"],
+            "Tab1",
+            ["Tab1", "Tab2", "Tab3"],
+            "Tab1",
+        ),
+        (
+            "fewer_options",
+            ["Tab1", "Tab2"],
+            "Tab2",
+            ["Tab1", "Tab2"],
+            "Tab2",
+        ),
+        (
+            "empty_options",
+            [],
+            "",
+            [],
+            "",
+        ),
+    ],
+)
+def test_tab_input_valid(test_id, options, value, expected_options, expected_value):
+    """Test TabInput validation with valid inputs."""
+    data = TabInput(
+        name=f"valid_tab_{test_id}",
+        options=options,
+        value=value,
+    )
+    assert data.options == expected_options
+    assert data.value == expected_value
+
+
+@pytest.mark.parametrize(
+    ("test_id", "options", "value", "error_expected"),
+    [
+        (
+            "too_many_options",
+            ["Tab1", "Tab2", "Tab3", "Tab4"],
+            "Tab1",
+            ValidationError,
+        ),
+        (
+            "option_too_long",
+            [
+                "Tab1",
+                "ThisTabValueIsTooLongAndExceedsTwentyCharacters",
+                "Tab3",
+            ],
+            "Tab1",
+            ValidationError,
+        ),
+        (
+            "non_string_value",
+            ["Tab1", "Tab2", "Tab3"],
+            123,
+            TypeError,
+        ),
+    ],
+)
+def test_tab_input_invalid(test_id, options, value, error_expected):
+    """Test TabInput validation with invalid inputs."""
+    if error_expected:
+        with pytest.raises(error_expected):
+            TabInput(
+                name=f"invalid_tab_{test_id}",
+                options=options,
+                value=value,
+            )
+
+
 def test_instantiate_input_comprehensive():
     valid_data = {
         "StrInput": {"name": "str_input", "value": "A string"},
@@ -224,11 +323,16 @@ def test_instantiate_input_comprehensive():
             "name": "multiselect_input",
             "value": ["option1", "option2"],
         },
+        "TabInput": {
+            "name": "tab_input",
+            "options": ["Tab1", "Tab2", "Tab3"],
+            "value": "Tab1",
+        },
     }
 
     for input_type, data in valid_data.items():
         input_instance = instantiate_input(input_type, data)
         assert isinstance(input_instance, InputTypesMap[input_type])
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="Invalid input type: InvalidInput"):
         instantiate_input("InvalidInput", {"name": "invalid_input", "value": "Invalid"})

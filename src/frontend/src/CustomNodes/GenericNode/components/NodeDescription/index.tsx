@@ -1,45 +1,67 @@
+import { memo, useEffect, useMemo, useRef, useState } from "react";
+import Markdown from "react-markdown";
 import { Textarea } from "@/components/ui/textarea";
-import useFlowsManagerStore from "@/stores/flowsManagerStore";
 import useFlowStore from "@/stores/flowStore";
+import useFlowsManagerStore from "@/stores/flowsManagerStore";
 import { handleKeyDown } from "@/utils/reactflowUtils";
 import { cn } from "@/utils/utils";
-import { useEffect, useRef, useState } from "react";
-import Markdown from "react-markdown";
 
 export default function NodeDescription({
   description,
   selected,
   nodeId,
-  emptyPlaceholder = "Double Click to Edit Description",
+  emptyPlaceholder = "",
+  placeholderClassName,
   charLimit,
   inputClassName,
   mdClassName,
   style,
+  editNameDescription,
+  setEditNameDescription,
+  stickyNote,
+  setHasChangedNodeDescription,
+  readOnly = false,
 }: {
   description?: string;
-  selected: boolean;
+  selected?: boolean;
   nodeId: string;
   emptyPlaceholder?: string;
+  placeholderClassName?: string;
   charLimit?: number;
   inputClassName?: string;
   mdClassName?: string;
   style?: React.CSSProperties;
+  editNameDescription: boolean;
+  setEditNameDescription?: (value: boolean) => void;
+  stickyNote?: boolean;
+  setHasChangedNodeDescription?: (value: boolean) => void;
+  readOnly?: boolean;
 }) {
-  const [inputDescription, setInputDescription] = useState(false);
-  const [nodeDescription, setNodeDescription] = useState(description);
+  const [nodeDescription, setNodeDescription] = useState<string>(
+    description ?? "",
+  );
   const takeSnapshot = useFlowsManagerStore((state) => state.takeSnapshot);
   const setNode = useFlowStore((state) => state.setNode);
   const overflowRef = useRef<HTMLDivElement>(null);
   const [hasScroll, sethasScroll] = useState(false);
 
   useEffect(() => {
+    if (selected && editNameDescription && !readOnly) {
+      takeSnapshot();
+    }
+  }, [editNameDescription, readOnly, selected, takeSnapshot]);
+
+  useEffect(() => {
+    if (readOnly && editNameDescription) {
+      setEditNameDescription?.(false);
+      setNodeDescription(description ?? "");
+    }
+  }, [description, editNameDescription, readOnly, setEditNameDescription]);
+
+  useEffect(() => {
     //timeout to wait for the dom to update
     setTimeout(() => {
       if (overflowRef.current) {
-        console.log(
-          overflowRef.current.clientHeight,
-          overflowRef.current.scrollHeight,
-        );
         if (
           overflowRef.current.clientHeight < overflowRef.current.scrollHeight
         ) {
@@ -49,79 +71,134 @@ export default function NodeDescription({
         }
       }
     }, 200);
-  }, [inputDescription]);
+  }, [editNameDescription]);
 
   useEffect(() => {
-    if (!selected) {
-      setInputDescription(false);
-    }
-  }, [selected]);
-
-  useEffect(() => {
-    setNodeDescription(description);
+    setNodeDescription(description ?? "");
   }, [description]);
+
+  const MemoizedMarkdown = memo(Markdown);
+
+  const renderedDescription = useMemo(() => {
+    if (description === "" || !description) {
+      return emptyPlaceholder;
+    }
+    return (
+      <MemoizedMarkdown
+        className={cn(
+          "markdown prose flex w-full flex-col leading-5 word-break-break-word [&_pre]:whitespace-break-spaces [&_pre]:!bg-code-description-background [&_pre_code]:!bg-code-description-background",
+          stickyNote
+            ? "!text-base !font-medium leading-relaxed [&_p]:!text-base [&_p]:!font-medium [&_li]:!text-base [&_li]:!font-medium"
+            : "text-xs",
+          mdClassName,
+        )}
+        components={{
+          a: ({ node, ...props }) => (
+            <a {...props} target="_blank" rel="noopener noreferrer">
+              {props.children}
+            </a>
+          ),
+        }}
+      >
+        {String(description)}
+      </MemoizedMarkdown>
+    );
+  }, [description, emptyPlaceholder, mdClassName]);
+
+  const handleBlurFn = () => {
+    if (readOnly) {
+      setNodeDescription(description ?? "");
+      setEditNameDescription?.(false);
+      return;
+    }
+    setNodeDescription(nodeDescription);
+    setNode(nodeId, (old) => ({
+      ...old,
+      data: {
+        ...old.data,
+        node: {
+          ...old.data.node,
+          description: nodeDescription,
+        },
+      },
+    }));
+    if (stickyNote) {
+      setEditNameDescription?.(false);
+    }
+  };
+
+  const handleKeyDownFn = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (readOnly) return;
+    handleKeyDown(e, nodeDescription, "");
+
+    if (e.key === "Escape") {
+      setEditNameDescription?.(false);
+      setNodeDescription(description ?? "");
+
+      if (stickyNote) {
+        setNodeDescription(nodeDescription);
+        setNode(nodeId, (old) => ({
+          ...old,
+          data: {
+            ...old.data,
+            node: {
+              ...old.data.node,
+              description: nodeDescription,
+            },
+          },
+        }));
+      }
+    }
+  };
+
+  const handleDoubleClickFn = () => {
+    if (stickyNote && !readOnly) {
+      setEditNameDescription?.(true);
+      takeSnapshot();
+    }
+  };
+
+  const onChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    if (readOnly) return;
+    setHasChangedNodeDescription?.(true);
+    setNodeDescription(e.target.value);
+  };
 
   return (
     <div
       className={cn(
-        "generic-node-desc",
-        !inputDescription ? "overflow-auto" : "",
+        !editNameDescription || readOnly ? "overflow-auto" : "overflow-hidden",
         hasScroll ? "nowheel" : "",
+        charLimit ? "flex flex-col" : "",
+        "w-full",
       )}
     >
-      {inputDescription ? (
+      {editNameDescription && !readOnly ? (
         <>
           <Textarea
             maxLength={charLimit}
-            className={cn("nowheel h-full", inputClassName)}
+            className={cn(
+              "nowheel w-full text-xs focus:border-primary focus:ring-0",
+              stickyNote
+                ? "overflow-auto p-0 px-2 pt-0.5 !text-base font-medium"
+                : "px-2 py-0.5",
+              inputClassName,
+            )}
             autoFocus
             style={style}
-            onBlur={() => {
-              setInputDescription(false);
-              setNodeDescription(nodeDescription);
-              setNode(nodeId, (old) => ({
-                ...old,
-                data: {
-                  ...old.data,
-                  node: {
-                    ...old.data.node,
-                    description: nodeDescription,
-                  },
-                },
-              }));
-            }}
+            onBlur={handleBlurFn}
             value={nodeDescription}
-            onChange={(e) => setNodeDescription(e.target.value)}
-            onKeyDown={(e) => {
-              handleKeyDown(e, nodeDescription, "");
-              if (
-                e.key === "Enter" &&
-                e.shiftKey === false &&
-                e.ctrlKey === false &&
-                e.altKey === false
-              ) {
-                setInputDescription(false);
-                setNodeDescription(nodeDescription);
-                setNode(nodeId, (old) => ({
-                  ...old,
-                  data: {
-                    ...old.data,
-                    node: {
-                      ...old.data.node,
-                      description: nodeDescription,
-                    },
-                  },
-                }));
-              }
-            }}
+            onChange={onChange}
+            onKeyDown={handleKeyDownFn}
           />
-          {charLimit && (
+          {charLimit && (nodeDescription?.length ?? 0) >= charLimit - 100 && (
             <div
               className={cn(
-                "text-left text-xs",
+                "pt-1 text-left !text-mmd",
                 (nodeDescription?.length ?? 0) >= charLimit
                   ? "text-error"
                   : "text-primary",
+                placeholderClassName,
               )}
               data-testid="note_char_limit"
             >
@@ -131,28 +208,17 @@ export default function NodeDescription({
         </>
       ) : (
         <div
+          data-testid="generic-node-desc"
           ref={overflowRef}
           className={cn(
-            "nodoubleclick generic-node-desc-text h-full cursor-text word-break-break-word dark:text-note-placeholder",
+            "nodoubleclick generic-node-desc-text h-full cursor-grab text-muted-foreground word-break-break-word",
             description === "" || !description ? "font-light italic" : "",
+            stickyNote && "text-base font-medium overflow-auto max-h-full",
+            placeholderClassName,
           )}
-          onDoubleClick={(e) => {
-            setInputDescription(true);
-            takeSnapshot();
-          }}
+          onDoubleClick={handleDoubleClickFn}
         >
-          {description === "" || !description ? (
-            emptyPlaceholder
-          ) : (
-            <Markdown
-              className={cn(
-                "markdown prose flex h-full w-full flex-col text-primary word-break-break-word dark:prose-invert",
-                mdClassName,
-              )}
-            >
-              {String(description)}
-            </Markdown>
-          )}
+          {renderedDescription}
         </div>
       )}
     </div>

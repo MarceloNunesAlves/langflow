@@ -1,297 +1,174 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "../../fixtures";
+import { addLegacyComponents } from "../../utils/add-legacy-components";
+import { adjustScreenView } from "../../utils/adjust-screen-view";
+import { awaitBootstrapTest } from "../../utils/await-bootstrap-test";
+import { TEXTS } from "../../utils/constants/texts";
+import { TIMEOUTS } from "../../utils/constants/timeouts";
+import { addComponentFromSidebar } from "../../utils/flow/add-component-from-sidebar";
+import { replaceComponentCode } from "../../utils/flow/replace-component-code";
+import { removeOldApiKeys } from "../../utils/remove-old-api-keys";
+import { updateOldComponents } from "../../utils/update-old-components";
+import { zoomOut } from "../../utils/zoom-out";
 
-test("user must be able to stop a building", async ({ page }) => {
-  await page.goto("/");
-  // await page.waitForTimeout(2000);
+test(
+  "user must be able to stop a building",
+  { tag: ["@release", "@workspace", "@api"] },
+  async ({ page }) => {
+    await awaitBootstrapTest(page);
+    await page.getByTestId("blank-flow").click();
 
-  let modalCount = 0;
-  try {
-    const modalTitleElement = await page?.getByTestId("modal-title");
-    if (modalTitleElement) {
-      modalCount = await modalTitleElement.count();
-    }
-  } catch (error) {
-    modalCount = 0;
-  }
+    await addLegacyComponents(page);
 
-  while (modalCount === 0) {
-    await page.getByText("New Project", { exact: true }).click();
-    await page.waitForTimeout(3000);
-    modalCount = await page.getByTestId("modal-title")?.count();
-  }
+    //first component
 
-  await page.getByRole("heading", { name: "Blank Flow" }).click();
-
-  //first component
-
-  await page.getByTestId("extended-disclosure").click();
-  await page.getByPlaceholder("Search").click();
-  await page.getByPlaceholder("Search").fill("text input");
-  // await page.waitForTimeout(1000);
-
-  await page
-    .getByTestId("inputsText Input")
-    .dragTo(page.locator('//*[@id="react-flow-id"]'));
-
-  await page.getByTitle("zoom out").click();
-  await page
-    .locator('//*[@id="react-flow-id"]')
-    .hover()
-    .then(async () => {
-      await page.mouse.down();
-      await page.mouse.move(-800, 300);
+    await addComponentFromSidebar(page, {
+      search: TEXTS.searchTextInput,
+      testId: "input_outputText Input",
+      position: { x: 50, y: 50 },
     });
 
-  await page.mouse.up();
+    await zoomOut(page, 3);
+    //second component
 
-  //second component
-
-  await page.getByTestId("extended-disclosure").click();
-  await page.getByPlaceholder("Search").click();
-  await page.getByPlaceholder("Search").fill("url");
-  // await page.waitForTimeout(1000);
-
-  await page
-    .getByTestId("dataURL")
-    .dragTo(page.locator('//*[@id="react-flow-id"]'));
-
-  await page.getByTitle("zoom out").click();
-  await page
-    .locator('//*[@id="react-flow-id"]')
-    .hover()
-    .then(async () => {
-      await page.mouse.down();
-      await page.mouse.move(-800, 300);
+    await addComponentFromSidebar(page, {
+      search: TEXTS.searchUrl,
+      testId: "data_sourceURL",
+      position: { x: 50, y: 300 },
     });
 
-  await page.mouse.up();
+    //third component
 
-  //third component
-
-  await page.getByTestId("extended-disclosure").click();
-  await page.getByPlaceholder("Search").click();
-  await page.getByPlaceholder("Search").fill("split text");
-  // await page.waitForTimeout(1000);
-
-  await page
-    .getByTestId("helpersSplit Text")
-    .dragTo(page.locator('//*[@id="react-flow-id"]'));
-
-  await page.getByTitle("zoom out").click();
-  await page
-    .locator('//*[@id="react-flow-id"]')
-    .hover()
-    .then(async () => {
-      await page.mouse.down();
-      await page.mouse.move(-800, 300);
+    await addComponentFromSidebar(page, {
+      search: "split text",
+      testId: "processingSplit Text",
+      position: { x: 300, y: 500 },
     });
 
-  await page.mouse.up();
+    //fourth component
 
-  //fourth component
-
-  await page.getByTestId("extended-disclosure").click();
-  await page.getByPlaceholder("Search").click();
-  await page.getByPlaceholder("Search").fill("parse data");
-  // await page.waitForTimeout(1000);
-
-  await page
-    .getByTestId("helpersParse Data")
-    .dragTo(page.locator('//*[@id="react-flow-id"]'));
-
-  await page.getByTitle("zoom out").click();
-  await page
-    .locator('//*[@id="react-flow-id"]')
-    .hover()
-    .then(async () => {
-      await page.mouse.down();
-      await page.mouse.move(-800, 300);
+    await addComponentFromSidebar(page, {
+      search: "data to message",
+      testId: "processingData to Message",
+      position: { x: 100, y: 500 },
     });
 
-  await page.mouse.up();
+    //fifth component
 
-  //fifth component
-
-  await page.getByTestId("extended-disclosure").click();
-  await page.getByPlaceholder("Search").click();
-  await page.getByPlaceholder("Search").fill("chat output");
-  // await page.waitForTimeout(1000);
-
-  await page
-    .getByTestId("outputsChat Output")
-    .dragTo(page.locator('//*[@id="react-flow-id"]'));
-
-  await page.getByTitle("zoom out").click();
-  await page
-    .locator('//*[@id="react-flow-id"]')
-    .hover()
-    .then(async () => {
-      await page.mouse.down();
-      await page.mouse.move(-800, 300);
+    await addComponentFromSidebar(page, {
+      search: TEXTS.searchChatOutput,
+      testId: "input_outputChat Output",
+      position: { x: 600, y: 300 },
     });
 
-  await page.mouse.up();
+    await updateOldComponents(page);
+    await removeOldApiKeys(page);
 
-  let outdatedComponents = await page.getByTestId("icon-AlertTriangle").count();
+    await adjustScreenView(page, { numberOfZoomOut: 3 });
 
-  while (outdatedComponents > 0) {
-    await page.getByTestId("icon-AlertTriangle").first().click();
-    // await page.waitForTimeout(1000);
-    outdatedComponents = await page.getByTestId("icon-AlertTriangle").count();
-  }
+    //connection 1
+    await page
+      .getByTestId("handle-urlcomponent-shownode-extracted pages-right")
+      .click();
+    await page.getByTestId("handle-splittext-shownode-input-left").click();
 
-  await page.getByTitle("fit view").click();
+    //connection 2
+    await page
+      .getByTestId("handle-textinput-shownode-output text-right")
+      .click();
+    await page.getByTestId("handle-splittext-shownode-separator-left").click();
 
-  //connection 1
-  const urlOutput = await page
-    .getByTestId("handle-url-shownode-data-right")
-    .nth(0);
-  await urlOutput.hover();
-  await page.mouse.down();
-  const splitTextInputData = await page.getByTestId(
-    "handle-splittext-shownode-data inputs-left",
-  );
-  await splitTextInputData.hover();
-  await page.mouse.up();
+    //connection 3
+    await page.getByTestId("handle-splittext-shownode-chunks-right").click();
+    await page.getByTestId("handle-parsedata-shownode-json-left").click();
 
-  //connection 2
-  const textOutput = await page
-    .getByTestId("handle-textinput-shownode-text-right")
-    .nth(0);
-  await textOutput.hover();
-  await page.mouse.down();
-  const splitTextInput = await page.getByTestId(
-    "handle-splittext-shownode-separator-left",
-  );
-  await splitTextInput.hover();
-  await page.mouse.up();
+    //connection 4
+    await page.getByTestId("handle-parsedata-shownode-message-right").click();
+    await page
+      .getByTestId("handle-chatoutput-noshownode-inputs-target")
+      .click();
 
-  await page.getByTitle("fit view").click();
+    await adjustScreenView(page);
 
-  //connection 3
-  const splitTextOutput = await page
-    .getByTestId("handle-splittext-shownode-chunks-right")
-    .nth(0);
-  await splitTextOutput.hover();
-  await page.mouse.down();
-  const parseDataInput = await page.getByTestId(
-    "handle-parsedata-shownode-data-left",
-  );
-  await parseDataInput.hover();
-  await page.mouse.up();
+    await page.getByText("Text Input", { exact: true }).click();
 
-  //connection 4
-  const parseDataOutput = await page
-    .getByTestId("handle-parsedata-shownode-text-right")
-    .nth(0);
-  await parseDataOutput.hover();
-  await page.mouse.down();
-  const chatOutputInput = await page.getByTestId(
-    "handle-chatoutput-shownode-text-left",
-  );
-  await chatOutputInput.hover();
-  await page.mouse.up();
+    await page.getByTestId("textarea_str_input_value").first().fill(",");
 
-  await page.getByTitle("fit view").click();
+    await page.getByText("URL", { exact: true }).click();
 
-  await page.getByTestId("textarea_str_input_value").first().fill(",");
+    await page
+      .getByTestId("inputlist_str_urls_0")
+      .fill("https://www.nature.com/articles/d41586-023-02870-5");
 
-  await page
-    .getByTestId("inputlist_str_urls_0")
-    .fill("https://www.nature.com/articles/d41586-023-02870-5");
+    await page.getByText("Split Text", { exact: true }).click();
 
-  await page.getByTestId("int_int_chunk_size").fill("2");
-  await page.getByTestId("int_int_chunk_overlap").fill("1");
+    await page.getByTestId("int_int_chunk_size").fill("2");
+    await page.getByTestId("int_int_chunk_overlap").fill("1");
 
-  await page.getByTestId("button_run_chat output").click();
+    const timerCode = `
+# from langflow.field_typing import Data
+from langflow.custom import Component
+from langflow.io import MessageTextInput, Output
+from langflow.schema import Data
+import time
 
-  await page.waitForSelector("text=Building", {
-    timeout: 100000,
-  });
+class CustomComponent(Component):
+    display_name = "Custom Component"
+    description = "Use as a template to create your own component."
+    documentation: str = "https://docs.langflow.org/components-custom-components"
+    icon = "custom_components"
+    name = "CustomComponent"
 
-  await page.waitForSelector('[data-testid="loading_icon"]', {
-    timeout: 100000,
-  });
+    inputs = [
+        MessageTextInput(name="input_value", display_name="Input Value", value="Hello, World!", tool_mode=True),
+    ]
 
-  expect(
-    await page.getByTestId("loading_icon").last().isVisible(),
-  ).toBeTruthy();
-  expect(
-    await page.getByTestId("stop_building_button").isEnabled(),
-  ).toBeTruthy();
+    outputs = [
+        Output(display_name="Output", name="output", method="build_output"),
+    ]
 
-  await page.getByTestId("stop_building_button").click();
+    def build_output(self) -> Data:
+        time.sleep(10000)
+        data = Data(value=self.input_value)
+        self.status = data
+        return data
+  `;
 
-  await page.waitForTimeout(1000);
+    await page.getByTestId("sidebar-custom-component-button").click();
+    await adjustScreenView(page, { numberOfZoomOut: 2 });
 
-  expect(await page.getByTestId("loading_icon").isHidden()).toBeTruthy();
-  expect(
-    await page.getByTestId("stop_building_button").isEnabled(),
-  ).toBeFalsy();
+    await page.getByTestId("title-Custom Component").first().click();
 
-  await page.waitForSelector("text=Saved", {
-    timeout: 100000,
-  });
+    const componentFlowRefresh = page.waitForResponse(
+      (response) => {
+        const url = new URL(response.url());
+        return (
+          response.request().method() === "GET" &&
+          url.pathname === "/api/v1/flows/" &&
+          url.searchParams.get("components_only") === "true" &&
+          url.searchParams.get("get_all") === "true"
+        );
+      },
+      { timeout: TIMEOUTS.standard },
+    );
+    await replaceComponentCode(page, timerCode);
+    const refreshResponse = await componentFlowRefresh;
+    expect(refreshResponse.ok()).toBeTruthy();
+    expect(await refreshResponse.finished()).toBeNull();
 
-  await page.getByTestId("button_run_chat output").click();
+    await page.getByTestId("button_run_custom component").click();
 
-  await page.waitForSelector("text=Building", {
-    timeout: 100000,
-  });
+    await page.waitForSelector("text=running", {
+      timeout: 100000,
+    });
 
-  await page.waitForSelector('[data-testid="loading_icon"]', {
-    timeout: 100000,
-  });
+    await page.waitForSelector('[data-testid="stop_building_button"]', {
+      timeout: 100000,
+    });
 
-  await page.waitForSelector("text=Building", {
-    timeout: 100000,
-  });
+    await page.getByTestId("stop_building_button").last().click();
 
-  expect(await page.getByText("Building").isVisible()).toBeTruthy();
-
-  expect(
-    await page.getByTestId("stop_building_button").isEnabled(),
-  ).toBeTruthy();
-
-  await page.waitForSelector("text=Building", {
-    timeout: 100000,
-  });
-
-  expect(await page.getByText("Building").isVisible()).toBeTruthy();
-
-  expect(
-    await page.getByTestId("stop_building_button").isEnabled(),
-  ).toBeTruthy();
-
-  await page.getByTestId("stop_building_button").click();
-
-  await page.waitForSelector("text=Saved", {
-    timeout: 100000,
-  });
-
-  await page.getByTestId("button_run_chat output").click();
-
-  await page.waitForSelector('[data-testid="loading_icon"]', {
-    timeout: 100000,
-  });
-
-  await page.waitForSelector("text=Building", {
-    timeout: 100000,
-  });
-
-  expect(await page.getByText("Building").isVisible()).toBeTruthy();
-
-  expect(
-    await page.getByTestId("stop_building_button").isEnabled(),
-  ).toBeTruthy();
-
-  await page.getByTestId("stop_building_button").click();
-
-  await page.waitForSelector("text=Saved", {
-    timeout: 100000,
-  });
-
-  expect(
-    await page.getByTestId("stop_building_button").isEnabled(),
-  ).toBeFalsy();
-});
+    await page.waitForSelector("text=build stopped", {
+      timeout: 100000,
+    });
+  },
+);

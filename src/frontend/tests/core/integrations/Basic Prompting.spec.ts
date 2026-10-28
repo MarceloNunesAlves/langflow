@@ -1,117 +1,92 @@
-import { expect, test } from "@playwright/test";
-import * as dotenv from "dotenv";
-import path from "path";
+import { expect } from "../../fixtures";
+import { configureLoopbackOpenAI } from "../../utils/configure-loopback-openai";
+import { TEXTS } from "../../utils/constants/texts";
+import { buildFlowAndWait } from "../../utils/flow/build-flow-and-wait";
+import { openStarterProject } from "../../utils/flow/open-starter-project";
+import { seedLoopbackProvider } from "../../utils/seed-loopback-provider";
+import { withEventDeliveryModes } from "../../utils/withEventDeliveryModes";
 
-test("Basic Prompting (Hello, World)", async ({ page }) => {
-  test.skip(
-    !process?.env?.OPENAI_API_KEY,
-    "OPENAI_API_KEY required to run this test",
-  );
+withEventDeliveryModes(
+  "Basic Prompting (Hello, World)",
+  { tag: ["@release", "@starter-projects"] },
+  async ({ page }) => {
+    await seedLoopbackProvider(page);
+    await openStarterProject(page, "Basic Prompting");
 
-  if (!process.env.CI) {
-    dotenv.config({ path: path.resolve(__dirname, "../../.env") });
-  }
+    await configureLoopbackOpenAI(page);
+    await buildFlowAndWait(page);
 
-  await page.goto("/");
-  await page.waitForSelector('[data-testid="mainpage_title"]', {
-    timeout: 30000,
-  });
+    await page
+      .getByRole("button", { name: TEXTS.playground, exact: true })
+      .click();
+    await page
+      .getByText(TEXTS.labelNoInputMessage, { exact: true })
+      .last()
+      .isVisible();
 
-  await page.waitForSelector('[id="new-project-btn"]', {
-    timeout: 30000,
-  });
+    //create a new session - default session can not be deleted
+    await page.getByTestId("new-chat").click();
+    await expect(page.getByTitle("New Session 0")).toBeVisible();
+    await page.waitForSelector('[data-testid="input-chat-playground"]', {
+      timeout: 100000,
+    });
 
-  let modalCount = 0;
-  try {
-    const modalTitleElement = await page?.getByTestId("modal-title");
-    if (modalTitleElement) {
-      modalCount = await modalTitleElement.count();
-    }
-  } catch (error) {
-    modalCount = 0;
-  }
+    await page
+      .getByTestId("input-chat-playground")
+      .last()
+      .fill("Say hello as a pirate");
 
-  while (modalCount === 0) {
-    await page.getByText("New Project", { exact: true }).click();
-    await page.waitForTimeout(3000);
-    modalCount = await page.getByTestId("modal-title")?.count();
-  }
+    await page.waitForSelector('[data-testid="button-send"]', {
+      timeout: 100000,
+    });
 
-  await page.getByRole("heading", { name: "Basic Prompting" }).click();
+    await page.getByTestId("button-send").last().click();
 
-  await page.waitForSelector('[title="fit view"]', {
-    timeout: 100000,
-  });
+    await page.waitForSelector("text=matey", {
+      timeout: 100000,
+    });
 
-  await page.getByTitle("fit view").click();
-  await page.getByTitle("zoom out").click();
-  await page.getByTitle("zoom out").click();
-  await page.getByTitle("zoom out").click();
+    await expect(page.getByText("matey").last()).toBeVisible();
 
-  let outdatedComponents = await page.getByTestId("icon-AlertTriangle").count();
+    // Open the message logs table view to verify metadata columns
+    // (timestamp/text/sender/...). The header chat-menu is hidden in
+    // fullscreen, so click the sidebar session more-menu instead.
+    await page
+      .locator('[data-testid^="session-"][data-testid$="-more-menu"]')
+      .last()
+      .click();
+    await page.getByTestId("message-logs-option").click();
 
-  while (outdatedComponents > 0) {
-    await page.getByTestId("icon-AlertTriangle").first().click();
-    await page.waitForTimeout(1000);
-    outdatedComponents = await page.getByTestId("icon-AlertTriangle").count();
-  }
+    await expect(
+      page.getByText("timestamp", { exact: true }).last(),
+    ).toBeVisible();
+    await expect(page.getByText("text", { exact: true }).last()).toBeVisible();
+    await expect(
+      page.getByText("sender", { exact: true }).last(),
+    ).toBeVisible();
+    await expect(
+      page.getByText("sender_name", { exact: true }).last(),
+    ).toBeVisible();
+    await expect(
+      page.getByText("session_id", { exact: true }).last(),
+    ).toBeVisible();
+    await expect(page.getByText("files", { exact: true }).last()).toBeVisible();
+    await expect(page.getByRole("gridcell").last()).toBeVisible();
 
-  await page
-    .getByTestId("popover-anchor-input-api_key")
-    .fill(process.env.OPENAI_API_KEY ?? "");
+    // Close the logs panel so the rest of the playground UI is reachable again.
+    await page.getByRole("button", { name: TEXTS.close }).click();
+    // Use sidebar session more menu (chat-header-more-menu is hidden in fullscreen)
+    await page
+      .locator('[data-testid^="session-"][data-testid$="-more-menu"]')
+      .last()
+      .click();
+    await page.getByTestId("delete-session-option").click();
+    await page.waitForSelector('[data-testid="input-chat-playground"]', {
+      timeout: 100000,
+    });
 
-  await page.getByTestId("dropdown_str_model_name").click();
-  await page.getByTestId("gpt-4o-1-option").click();
-
-  await page.waitForTimeout(1000);
-
-  await page.getByTestId("button_run_chat output").click();
-  await page.waitForSelector("text=built successfully", { timeout: 30000 });
-
-  await page.getByText("built successfully").last().click({
-    timeout: 15000,
-  });
-
-  await page.getByText("Playground", { exact: true }).click();
-  await page
-    .getByText("No input message provided.", { exact: true })
-    .last()
-    .isVisible();
-
-  await page.waitForSelector('[data-testid="input-chat-playground"]', {
-    timeout: 100000,
-  });
-
-  await page
-    .getByTestId("input-chat-playground")
-    .last()
-    .fill("Say hello as a pirate");
-
-  await page.waitForSelector('[data-testid="icon-LucideSend"]', {
-    timeout: 100000,
-  });
-
-  await page.getByTestId("icon-LucideSend").last().click();
-
-  await page.waitForSelector("text=matey", {
-    timeout: 100000,
-  });
-
-  await page.getByText("matey").last().isVisible();
-  await page.getByText("Default Session").last().click();
-
-  await page.getByText("timestamp", { exact: true }).last().isVisible();
-  await page.getByText("text", { exact: true }).last().isVisible();
-  await page.getByText("sender", { exact: true }).last().isVisible();
-  await page.getByText("sender_name", { exact: true }).last().isVisible();
-  await page.getByText("session_id", { exact: true }).last().isVisible();
-  await page.getByText("files", { exact: true }).last().isVisible();
-
-  await page.getByRole("gridcell").last().isVisible();
-  await page.getByTestId("icon-Trash2").first().click();
-  await page.waitForSelector('[data-testid="input-chat-playground"]', {
-    timeout: 100000,
-  });
-
-  await page.getByTestId("input-chat-playground").last().isVisible();
-});
+    await expect(
+      page.getByTestId("input-chat-playground").last(),
+    ).toBeVisible();
+  },
+);

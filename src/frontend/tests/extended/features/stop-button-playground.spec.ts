@@ -1,73 +1,13 @@
-import { expect, test } from "@playwright/test";
-import uaParser from "ua-parser-js";
+import { expect, test } from "../../fixtures";
+import { adjustScreenView } from "../../utils/adjust-screen-view";
+import { TID } from "../../utils/constants/testIds";
+import { TEXTS } from "../../utils/constants/texts";
+import { TIMEOUTS } from "../../utils/constants/timeouts";
+import { addComponentFromSidebar } from "../../utils/flow/add-component-from-sidebar";
+import { openBlankFlow } from "../../utils/flow/open-blank-flow";
+import { replaceComponentCode } from "../../utils/flow/replace-component-code";
 
-test("User must be able to stop building from inside Playground", async ({
-  page,
-}) => {
-  await page.goto("/");
-  await page.waitForSelector('[data-testid="mainpage_title"]', {
-    timeout: 30000,
-  });
-
-  await page.waitForSelector('[id="new-project-btn"]', {
-    timeout: 30000,
-  });
-
-  let modalCount = 0;
-  try {
-    const modalTitleElement = await page?.getByTestId("modal-title");
-    if (modalTitleElement) {
-      modalCount = await modalTitleElement.count();
-    }
-  } catch (error) {
-    modalCount = 0;
-  }
-
-  while (modalCount === 0) {
-    await page.getByText("New Project", { exact: true }).click();
-    await page.waitForTimeout(3000);
-    modalCount = await page.getByTestId("modal-title")?.count();
-  }
-
-  await page.getByTestId("blank-flow").click();
-  await page.waitForSelector('[data-testid="extended-disclosure"]', {
-    timeout: 1000,
-  });
-  await page.getByTestId("extended-disclosure").click();
-  await page.getByPlaceholder("Search").click();
-  await page.getByPlaceholder("Search").fill("custom");
-
-  await page.waitForTimeout(1000);
-
-  await page
-    .locator('//*[@id="helpersCustom Component"]')
-    .dragTo(page.locator('//*[@id="react-flow-id"]'));
-  await page.mouse.up();
-  await page.mouse.down();
-  await page.getByTitle("fit view").click();
-  await page.getByTitle("zoom out").click();
-  await page.getByTitle("zoom out").click();
-  await page.getByTitle("zoom out").click();
-
-  await page.getByPlaceholder("Search").click();
-  await page.getByPlaceholder("Search").fill("chat output");
-
-  await page.waitForTimeout(1000);
-
-  await page
-    .getByTestId("outputsChat Output")
-    .dragTo(page.locator('//*[@id="react-flow-id"]'));
-
-  await page.getByTitle("fit view").click();
-  await page.getByTitle("zoom out").click();
-  await page.getByTitle("zoom out").click();
-  await page.getByTitle("zoom out").click();
-
-  await page.getByTestId("div-generic-node").nth(0).click();
-
-  await page.getByTestId("code-button-modal").nth(0).click();
-
-  const waitTimeoutCode = `
+const SLEEP_60_CUSTOM_COMPONENT = `
 # from langflow.field_typing import Data
 from langflow.custom import Component
 from langflow.io import MessageTextInput, Output
@@ -78,7 +18,7 @@ from langflow.schema.message import Message
 class CustomComponent(Component):
     display_name = "Custom Component"
     description = "Use as a template to create your own component."
-    documentation: str = "http://docs.langflow.org/components/custom"
+    documentation: str = "https://docs.langflow.org/components-custom-components"
     icon = "custom_components"
     name = "CustomComponent"
 
@@ -96,64 +36,99 @@ class CustomComponent(Component):
         sleep(60)
         return data`;
 
-  const getUA = await page.evaluate(() => navigator.userAgent);
-  const userAgentInfo = uaParser(getUA);
-  let control = "Control";
+test(
+  "User must be able to stop building from inside Playground",
+  { tag: ["@release", "@api"] },
+  async ({ page }) => {
+    await openBlankFlow(page);
 
-  if (userAgentInfo.os.name.includes("Mac")) {
-    control = "Meta";
-  }
+    await page.waitForSelector(
+      `[data-testid="${TID.sidebarCustomComponentButton}"]`,
+      { timeout: TIMEOUTS.short },
+    );
 
-  await page.locator(".ace_content").click();
-  await page.keyboard.press(`${control}+A`);
-  await page.locator("textarea").fill(waitTimeoutCode);
+    await page.waitForSelector(
+      `[data-testid="${TID.canvasControlsDropdown}"]`,
+      {
+        timeout: TIMEOUTS.short,
+      },
+    );
 
-  await page.getByText("Check & Save").last().click();
+    const canvasNodes = page.locator(".react-flow__node");
+    const previousNodeCount = await canvasNodes.count();
+    await expect(
+      page.getByTestId(TID.sidebarCustomComponentButton),
+    ).toBeEnabled();
+    await page.getByTestId(TID.sidebarCustomComponentButton).click();
+    await expect(canvasNodes).toHaveCount(previousNodeCount + 1);
+    await adjustScreenView(page);
 
-  await page.waitForTimeout(1000);
+    await addComponentFromSidebar(page, {
+      search: "chat output",
+      testId: "input_outputChat Output",
+      hoverAdd: true,
+    });
 
-  await page.getByTitle("fit view").click();
-  await page.getByTitle("zoom out").click();
-  await page.getByTitle("zoom out").click();
+    await adjustScreenView(page);
 
-  //connection 1
-  const elementCustomComponentOutput = await page
-    .getByTestId("handle-customcomponent-shownode-output-right")
-    .first();
+    const chatOutputNode = page.locator(".react-flow__node").filter({
+      has: page.getByText("Chat Output", { exact: true }),
+    });
+    await expect(chatOutputNode).toHaveCount(1);
 
-  await elementCustomComponentOutput.hover();
-  await page.mouse.down();
-  const elementChatOutput = await page
-    .getByTestId("handle-chatoutput-shownode-text-left")
-    .first();
-  await elementChatOutput.hover();
-  await page.mouse.up();
+    const customComponentNode = page.locator(".react-flow__node").filter({
+      has: page.getByText("Custom Component", { exact: true }),
+    });
+    await expect(customComponentNode).toHaveCount(1);
+    await customComponentNode.getByTestId(TID.divGenericNode).click();
 
-  await page.waitForTimeout(1000);
+    await replaceComponentCode(page, SLEEP_60_CUSTOM_COMPONENT);
+    await adjustScreenView(page, { numberOfZoomOut: 2 });
 
-  await page.getByTestId("button_run_chat output").click();
+    await chatOutputNode.getByTestId(TID.divGenericNode).click();
+    await page.getByTestId("more-options-modal").click();
+    await page.getByTestId("expand-button-modal").click();
+    await adjustScreenView(page, { numberOfZoomOut: 2 });
 
-  await page.waitForTimeout(1000);
+    // Connect Custom Component output → Chat Output input
+    const elementCustomComponentOutput = await page
+      .getByTestId("handle-customcomponent-shownode-output-right")
+      .first();
 
-  await page.getByText("Playground", { exact: true }).click();
+    await elementCustomComponentOutput.hover();
+    await page.mouse.down();
+    const elementChatOutput = await page
+      .getByTestId("handle-chatoutput-shownode-inputs-left")
+      .first();
+    await elementChatOutput.hover();
+    await page.mouse.up();
 
-  await page.waitForTimeout(1000);
+    await page.waitForSelector(`[data-testid="${TID.buttonRunChatOutput}"]`, {
+      timeout: TIMEOUTS.short,
+    });
 
-  await page.waitForSelector('[data-testid="icon-Square"]', {
-    timeout: 30000,
-  });
+    await page.getByTestId(TID.buttonRunChatOutput).click();
 
-  const elements = await page.$$('[data-testid="icon-Square"]');
+    await page
+      .getByRole("button", { name: TEXTS.playground, exact: true })
+      .click();
 
-  if (elements.length > 0) {
-    const lastElement = elements[elements.length - 1];
-    await lastElement.waitForElementState("visible");
-  }
+    await page.waitForSelector(`[data-testid="${TID.buttonStop}"]`, {
+      timeout: TIMEOUTS.standard,
+    });
 
-  expect(await page.getByTestId("icon-Square").last()).toBeVisible();
+    const elements = await page.$$(`[data-testid="${TID.buttonStop}"]`);
+    if (elements.length > 0) {
+      const lastElement = elements[elements.length - 1];
+      await lastElement.waitForElementState("visible");
+    }
 
-  await page.getByTestId("icon-Square").last().click();
+    await expect(page.getByTestId(TID.buttonStop).last()).toBeVisible();
+    await page.getByTestId(TID.buttonStop).last().click();
 
-  await page.waitForSelector("text=build stopped", { timeout: 30000 });
-  expect(await page.getByText("build stopped").isVisible()).toBeTruthy();
-});
+    await page.waitForSelector("text=build stopped", {
+      timeout: TIMEOUTS.standard,
+    });
+    await expect(page.getByText("build stopped")).toBeVisible();
+  },
+);

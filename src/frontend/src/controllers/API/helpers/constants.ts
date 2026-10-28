@@ -1,9 +1,12 @@
-import { BASE_URL_API } from "../../../constants/constants";
+import { getBaseUrl } from "@/customization/utils/urls";
+import { BASE_URL_API_V2 } from "../../../constants/constants";
 
 export const URLs = {
   TRANSACTIONS: `monitor/transactions`,
+  TRACES: `monitor/traces`,
   API_KEY: `api_key`,
   FILES: `files`,
+  FILE_MANAGEMENT: `files`,
   VERSION: `version`,
   MESSAGES: `monitor/messages`,
   BUILDS: `monitor/builds`,
@@ -11,22 +14,59 @@ export const URLs = {
   USERS: "users",
   LOGOUT: `logout`,
   LOGIN: `login`,
+  SESSION: `session`,
   AUTOLOGIN: "auto_login",
   REFRESH: "refresh",
   BUILD: `build`,
   CUSTOM_COMPONENT: `custom_component`,
   FLOWS: `flows`,
-  FOLDERS: `folders`,
+  FOLDERS: `projects`,
+  PROJECTS: `projects`,
   VARIABLES: `variables`,
   VALIDATE: `validate`,
   CONFIG: `config`,
   STARTER_PROJECTS: `starter-projects`,
+  SIDEBAR_CATEGORIES: `sidebar_categories`,
+  ALL: `all`,
+  VOICE: `voice`,
+  PUBLIC_FLOW: `flows/public_flow`,
+  MCP: `mcp/project`,
+  MCP_SERVERS: `mcp/servers`,
+  A2A: `a2a`,
+  KNOWLEDGE_BASE_STORAGE: `knowledge-base-storage`,
+  KNOWLEDGE_BASES: `knowledge_bases`,
+  MEMORIES: `memories`,
+  MODELS: `models`,
+  MODEL_PROVIDERS: `models/providers`,
+  RUN: `run`,
+  RUN_SESSION: `run/session`,
+  REGISTRATION: `registration`,
+  DEPLOYMENTS: `deployments`,
+  DEPLOYMENT_PROVIDER_ACCOUNTS: `deployments/providers`,
+  AGENTIC_ASSIST: `agentic/assist`,
+  AGENTIC_ASSIST_STREAM: `agentic/assist/stream`,
+  AGENTIC_CHECK_CONFIG: `agentic/check-config`,
+  AGENTIC_FILES: `agentic/files`,
+  POLICY_BUNDLE: `policy-bundle`,
+  MIGRATION: `migration`,
+  CONNECTIONS: `connections`,
+  INTEGRATIONS: `integrations`,
+  EXTENSIONS: `extensions`,
+  AUTHZ_ME_PERMISSIONS: `authz/me/permissions`,
 } as const;
 
-export function getURL(key: keyof typeof URLs, params: any = {}) {
+// IMPORTANT: FOLDERS endpoint now points to 'projects' for backward compatibility
+
+export function getURL(
+  key: keyof typeof URLs,
+  params: Record<string, unknown> = {},
+  v2: boolean = false,
+) {
   let url = URLs[key];
-  Object.keys(params).forEach((key) => (url += `/${params[key]}`));
-  return `${BASE_URL_API}${url.toString()}`;
+  for (const paramKey of Object.keys(params)) {
+    url += `/${params[paramKey]}`;
+  }
+  return `${v2 ? BASE_URL_API_V2 : getBaseUrl()}${url}`;
 }
 
 export type URLsType = typeof URLs;

@@ -1,18 +1,16 @@
-from langflow.components.agents.CrewAIAgent import CrewAIAgentComponent
-from langflow.components.agents.HierarchicalCrew import HierarchicalCrewComponent
-from langflow.components.helpers.HierarchicalTask import HierarchicalTaskComponent
-from langflow.components.inputs.ChatInput import ChatInput
-from langflow.components.models.OpenAIModel import OpenAIModelComponent
-from langflow.components.outputs.ChatOutput import ChatOutput
-from langflow.components.prompts.Prompt import PromptComponent
-from langflow.components.tools.SearchAPI import SearchAPIComponent
-from langflow.components.tools.YfinanceTool import YfinanceToolComponent
-from langflow.graph.graph.base import Graph
+from lfx.components.crewai.crewai import CrewAIAgentComponent
+from lfx.components.crewai.hierarchical_crew import HierarchicalCrewComponent
+from lfx.components.crewai.hierarchical_task import HierarchicalTaskComponent
+from lfx.components.input_output import ChatInput, ChatOutput
+from lfx.components.models import LanguageModelComponent
+from lfx.components.models_and_agents import PromptComponent
+from lfx.components.tools import SearchAPIComponent, YfinanceToolComponent
+from lfx.graph import Graph
 
 
 def complex_agent_graph():
-    llm = OpenAIModelComponent(model_name="gpt-4o-mini")
-    manager_llm = OpenAIModelComponent(model_name="gpt-4o")
+    llm = LanguageModelComponent()
+    manager_llm = LanguageModelComponent()
     search_api_tool = SearchAPIComponent()
     yahoo_search_tool = YfinanceToolComponent()
     dynamic_agent = CrewAIAgentComponent()
@@ -67,7 +65,8 @@ Backstory:""",
         template="""User's query:
 {query}
 
-Respond to the user with as much as information as you can about the topic. Delete if needed. If it is just a general query (e.g a greeting) you can respond them directly.""",
+Respond to the user with as much as information as you can about the topic. Delete if needed.
+If it is just a general query (e.g a greeting) you can respond them directly.""",
         query=chat_input.message_response,
     )
     manager_agent = CrewAIAgentComponent()
@@ -89,10 +88,9 @@ Respond to the user with as much as information as you can about the topic. Dele
     chat_output = ChatOutput()
     chat_output.set(input_value=crew_component.build_output)
 
-    graph = Graph(
+    return Graph(
         start=chat_input,
         end=chat_output,
         flow_name="Sequential Tasks Agent",
         description="This Agent runs tasks in a predefined sequence.",
     )
-    return graph
