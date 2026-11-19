@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Literal
 from fastapi import HTTPException
 from lfx.graph.graph.base import Graph
 from lfx.services.deps import session_scope
+from lfx.utils.file_path_security import FLOW_STORAGE_SCOPE_PREFIX
 from sqlalchemy import delete
 from sqlmodel import col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -30,7 +31,7 @@ from langflow.services.database.models.message.model import MessageTable
 from langflow.services.database.models.traces.model import SpanTable, TraceTable
 from langflow.services.database.models.transactions.model import TransactionTable
 from langflow.services.database.models.trigger.model import Trigger
-from langflow.services.database.models.user.model import UserRead
+from langflow.services.database.models.user.model import User, UserRead
 from langflow.services.database.models.vertex_builds.model import VertexBuildTable
 from langflow.services.triggers.cleanup import delete_triggers
 
@@ -50,6 +51,18 @@ async def _get_flow_name(flow_id: uuid.UUID) -> str:
     return flow.name
 
 
+async def get_authorized_legacy_flow_ids(flow_id: uuid.UUID | str) -> frozenset[str]:
+    """Allow a raw flow namespace only when no user owns the same ID."""
+    try:
+        flow_uuid = flow_id if isinstance(flow_id, uuid.UUID) else uuid.UUID(str(flow_id))
+    except (ValueError, AttributeError, TypeError):
+        return frozenset()
+    async with session_scope() as session:
+        if await session.get(User, flow_uuid) is not None:
+            return frozenset()
+    return frozenset({str(flow_uuid)})
+
+
 async def build_graph_from_data(flow_id: uuid.UUID | str, payload: dict, **kwargs):
     """Build and cache the graph.
 
@@ -65,7 +78,13 @@ async def build_graph_from_data(flow_id: uuid.UUID | str, payload: dict, **kwarg
     str_flow_id = str(flow_id)
     session_id = kwargs.get("session_id") or str_flow_id
 
-    graph = Graph.from_payload(payload, str_flow_id, flow_name, kwargs.get("user_id"))
+    graph = Graph.from_payload(
+        payload,
+        str_flow_id,
+        flow_name,
+        kwargs.get("user_id"),
+        authorized_legacy_flow_ids=await get_authorized_legacy_flow_ids(flow_id),
+    )
     if (execution_principal := kwargs.get("execution_principal")) is not None:
         stamp_execution_principal(graph, execution_principal)
     for vertex_id in graph.has_session_id_vertices:
@@ -105,16 +124,23 @@ async def build_and_cache_graph_from_data(
     chat_service: ChatService,
     graph_data: dict,
     *,
+    user_id: str | None = None,
     execution_principal: ExecutionPrincipal | None = None,
 ):  # -> Graph | Any:
     """Build and cache the graph.
 
     This is the Playground's primary build seam, so it carries the same
     ``execution_principal`` contract as ``build_graph_from_data``.
+    ``user_id`` records the caller on the graph for component initialization.
     """
     # Convert flow_id to str if it's UUID
     str_flow_id = str(flow_id) if isinstance(flow_id, uuid.UUID) else flow_id
-    graph = Graph.from_payload(graph_data, str_flow_id)
+    graph = Graph.from_payload(
+        graph_data,
+        str_flow_id,
+        user_id=user_id,
+        authorized_legacy_flow_ids=await get_authorized_legacy_flow_ids(flow_id),
+    )
     if execution_principal is not None:
         stamp_execution_principal(graph, execution_principal)
     await chat_service.set_cache(str_flow_id, graph)
@@ -192,18 +218,19 @@ async def cascade_delete_flow(
     return result.rowcount == 1
 
 
-# Public flow file paths must be ``{source_flow_id}/{safe_basename}`` — uploads
-# under that namespace are the only legitimate inputs for an unauthenticated
-# build. Anything else (absolute paths, traversal, foreign flow_ids) is a
-# probe at the arbitrary-file-read class of bug (GHSA-rcjh-r59h-gq37).
+# Public flow file paths must be ``flow-{source_flow_id}/{basename}`` (or legacy
+# ``{source_flow_id}/{basename}``) — uploads under that namespace are the only
+# legitimate inputs for an unauthenticated build. Anything else is a probe at
+# the arbitrary-file-read class of bug (GHSA-rcjh-r59h-gq37).
 _PUBLIC_FILE_PATH_RE = re.compile(
-    r"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})/([^/\\]+)$"
+    rf"^(?:{re.escape(FLOW_STORAGE_SCOPE_PREFIX)})?"
+    r"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})/([^/\\]+)$"
 )
 _PUBLIC_FILE_REJECTED_SUBSTRINGS = ("\x00", "..", "\\")
 
 
 def validate_public_files(files: list[str] | None, source_flow_id: uuid.UUID) -> None:
-    """Reject file references that aren't ``{source_flow_id}/{basename}``.
+    """Reject file references outside ``flow-{source_flow_id}/`` or legacy ``{source_flow_id}/``.
 
     Mitigates GHSA-rcjh-r59h-gq37: an unauthenticated build must not be
     able to address files outside its own flow's storage namespace.
